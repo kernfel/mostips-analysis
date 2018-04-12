@@ -56,7 +56,6 @@ def fit_IV(currents, voltages, params, postfix):
 
 # In[5]:
 
-
 def fit_leak(rec, params, ax = None, limits = (5200, 44800)):
     '''
     Finds the leak conductance parameters from a family of steps (holding to variable potential)
@@ -97,20 +96,36 @@ def exp_decay(t, tau, a):
 
 # In[7]:
 
+def get_tail_cut(rec2, tail_start):
+    '''Returns the index of the maximum of the last current trace's tail current'''
+    
+    # Locate the deepest point of the (negative) capacitance spike
+    tail_min = np.argmin(rec2.current[-1][tail_start:tail_start+1000]) + tail_start
+    
+    # Find the highest point of the following tail current, using the last (i.e., highest-voltage) trace
+    tail_cut = np.argmax(rec2.current[-1][tail_min:tail_start+1000]) + tail_min
+    return tail_cut
 
-def fit_tails(rec2, params, tail_start = 4760, tail_end = 40000):
+
+def fit_tails(rec2, tail_start = 4750, tail_end = 44000, median_len = 4000, baseline = None):
     '''
     Fits tail currents to an exponential decay. The fitting starts at the maximum of the final trace
     of the recording, which allows the capacitance spike to be discounted. t is considered to be 0 at tail_start.
+    The median current in [tail_end-median_len, tail_end] or, if provided, the `baseline` argument is subtracted
+    from the currents to ensure a decay to zero. If provided, baseline must be a list of values corresponding
+    to rec2.current.
     Returns: tau and A to fit each trace's decay as I = A*exp(-t/tau)
     '''
     rec2.tail_start = tail_start
-    rec2.tail_cut = np.argmax(rec2.current[-1][tail_start:tail_start+1000]) + tail_start
-
+    rec2.tail_cut = get_tail_cut(rec2, tail_start)
     rec2.tail_voltages = [np.median(rec2.voltage[i][rec2.tail_cut:tail_end]) for i in range(len(rec2.voltage))]
-    rec2.tails = [[rec2.current[i][j] - params['I_leak'](rec2.tail_voltages[i])
-                  for j in range(rec2.tail_cut, tail_end)]
-                 for i in range(len(rec2.current))]
+    
+    tails = [np.array(I[rec2.tail_cut:tail_end]) for I in rec2.current]
+    if type(baseline) == list and len(baseline) == len(tails):
+        rec2.tail_baseline = baseline
+    else:
+        rec2.tail_baseline = [np.median(I[-median_len:]) for I in tails]
+    rec2.tails = [tails[i] - rec2.tail_baseline[i] for i in range(len(tails))]
     
     t = np.arange(len(rec2.tails[0])) + rec2.tail_cut - tail_start
 
@@ -140,7 +155,7 @@ def plot_tail_fit(rec2, params, begin, end, tres, traces):
     
     plt.gca().set_prop_cycle(None)
     for i in traces:
-        plt.plot(tx, rec2.current[i][begin:end] - params['I_leak'](rec2.tail_voltages[i]))
+        plt.plot(tx, rec2.current[i][begin:end] - rec2.tail_baseline[i])
     
     plt.gca().set_prop_cycle(None)
     for i in traces:
