@@ -163,4 +163,30 @@ def plot_tail_fit(rec2, params, begin, end, tres, traces):
     
     plt.xlabel('Time after step [ms]')
     plt.ylabel(u'Current [μA]')
+    
+    
+def fit_capacitance(rec3, dt, offset, stepdur, nsteps = 10):
+    '''
+    Calculate and return the capacitance in nF from a series of VC steps between two voltages:
+    C = integral(I_step, dt) / dV
+    Baseline for the current at each step is the mean current measured during the final 25% of the step.
+    '''
+    currents = [np.array(rec3.current[0][i:i+stepdur]) for i in np.arange(nsteps/2)*stepdur + offset]
+    voltages = [np.median(rec3.voltage[0][:offset])] + \
+               [np.median(rec3.voltage[0][i:i+stepdur]) for i in np.arange(nsteps)*stepdur + offset]
+    C = [0]*len(currents)
+    
+    for (i, I, dV) in zip(range(len(C)), currents, np.diff(voltages)):
+        # Find steady-state current
+        steadystate = np.mean(I[stepdur*3/4:])
+        
+        # Normalise trace to steady state
+        I = np.abs(I - steadystate)
+        
+        # Establish noise level at normalised steady state
+        noise = np.mean(I[stepdur*3/4:])
+        
+        # Integrate, correcting for noise (integral over the baseline section alone ought to be zero)
+        C[i] = np.sum(I-noise) * dt / abs(dV)
 
+    return np.mean(C) * 1e3 # Capacitance in nF
