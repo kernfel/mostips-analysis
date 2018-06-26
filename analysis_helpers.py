@@ -49,9 +49,11 @@ def fit_IV(currents, voltages, params, postfix):
     "E_$postfix$", and function "I_$postfix$" in the params dict.
     '''
     fit = np.polyfit(voltages, currents, 1)
-    params[str('g_$').replace('$', postfix)] = fit[0] # mS
-    params[str('E_$').replace('$', postfix)] = -fit[1] / fit[0] # mV
-    params[str('I_$').replace('$', postfix)] = lambda V: V*fit[0] + fit[1]
+    g = str('g_$').replace('$', postfix)
+    E = str('E_$').replace('$', postfix)
+    params[g] = fit[0] # mS
+    params[E] = -fit[1] / fit[0] # mV
+    params[str('I_$').replace('$', postfix)] = lambda V: (V-params[E])*params[g]
 
 
 # In[5]:
@@ -71,13 +73,14 @@ def fit_leak(rec, params, ax = None, limits = (5200, 44800)):
     # Get the median currents to fit the leak current
     median_currents = [np.median(I[limits[0]:limits[1]]) for I in rec.current]
 
-    # Select traces with V <= -60 (could count, instead)
-    leak_traces = [i for i in range(len(median_voltages)) if median_voltages[i] <= -60]
-    leak_currents = [median_currents[i] for i in leak_traces]
-    leak_voltages = [median_voltages[i] for i in leak_traces]
+    # Find cutoff: Include all negative currents, and all voltages < -50
+    for i in range(len(median_currents)-1, 0, -1):
+        if median_currents[i] < 0 or median_voltages[i] < -50:
+            fit_to = i+1
+            break
     
     # Fit
-    fit_IV(leak_currents, leak_voltages, params, 'leak')
+    fit_IV(median_currents[:fit_to], median_voltages[:fit_to], params, 'leak')
 
     # Draw
     if ax != None:
@@ -93,18 +96,31 @@ def fit_leak(rec, params, ax = None, limits = (5200, 44800)):
 def exp_decay(t, tau, a):
     return a * np.exp(-t / tau)
 
+def exp2_decay(t, p):
+    return p[0]*np.exp(-t/p[1]) + p[2]*np.exp(-t/p[3])
+
 
 # In[7]:
 
 def get_tail_cut(rec2, tail_start):
-    '''Returns the index of the maximum of the last current trace's tail current'''
+    '''Returns the index of the latest maximum of the last n current trace's tail current'''
     
     # Locate the deepest point of the (negative) capacitance spike
-    tail_min = np.argmin(rec2.current[-1][tail_start:tail_start+1000]) + tail_start
+    tail_min = [np.argmin(I[tail_start:tail_start+500]) + tail_start for I in rec2.current]
+
+    # Locate the highest following point in each trace
+    tail_max_med = [(np.argmax(I[tmin:tail_start+500]) + tmin, np.median(I[tmin:tail_start+500]))
+                    for I, tmin in zip(rec2.current, tail_min)]
     
-    # Find the highest point of the following tail current, using the last (i.e., highest-voltage) trace
-    tail_cut = np.argmax(rec2.current[-1][tail_min:tail_start+1000]) + tail_min
-    return tail_cut
+    # Disregard traces where the tail current is negative
+    tail_max_positives = [t if med > 0 else 0 for t, med in tail_max_med]
+    
+    latest = max(tail_max_positives)
+    if latest == 0:
+        latest = tail_max_med[-1][0]
+    
+    # Return the latest positive peak and the number of negative traces
+    return latest, len(tail_max_positives) - np.count_nonzero(tail_max_positives)
 
 
 def fit_tails(rec2, tail_start = 4750, tail_end = 44000, median_len = 4000, baseline = None):
@@ -117,7 +133,7 @@ def fit_tails(rec2, tail_start = 4750, tail_end = 44000, median_len = 4000, base
     Returns: tau and A to fit each trace's decay as I = A*exp(-t/tau)
     '''
     rec2.tail_start = tail_start
-    rec2.tail_cut = get_tail_cut(rec2, tail_start)
+    rec2.tail_cut, rec2.tail_nnegative = get_tail_cut(rec2, tail_start)
     rec2.tail_voltages = [np.median(rec2.voltage[i][rec2.tail_cut:tail_end]) for i in range(len(rec2.voltage))]
     
     tails = [np.array(I[rec2.tail_cut:tail_end]) for I in rec2.current]
@@ -133,7 +149,7 @@ def fit_tails(rec2, tail_start = 4750, tail_end = 44000, median_len = 4000, base
     for i in range(len(rec2.tails)):
         ret = scipy.optimize.least_squares(lambda p, x, y: (exp_decay(x, p[0], p[1]) - y),
                                            (tau[-1], a[-1]) if i>0 else (4000,-0.05),
-                                           args = (t, rec2.tails[i])
+                                           args = (t, rec2.tails[i]), method='lm'
                                           )
         tau.append(ret.x[0])
         a.append(ret.x[1])
@@ -141,7 +157,78 @@ def fit_tails(rec2, tail_start = 4750, tail_end = 44000, median_len = 4000, base
     rec2.tau, rec2.a = tau, a
     return tau, a
 
+def fit_tails_exp2(rec2, tail_start = 4750, tail_end = 44000, median_len = 8000, baseline = None, min_tau = 30):
+    '''
+    Fits tail currents to a double exponential decay. For more details, see fit_tails.
+    Returns: a list of vectors [a1, tau1, a2, tau2] to fit each trace with exp2_decay, which is also deposited in rec2.pdecay
+    '''
+    rec2.tail_start = tail_start
+    rec2.tail_cut, rec2.tail_nnegative = get_tail_cut(rec2, tail_start)
+    rec2.tail_voltages = [np.median(rec2.voltage[i][rec2.tail_cut:tail_end]) for i in range(len(rec2.voltage))]
+    
+    tails = [np.array(I[rec2.tail_cut:tail_end]) for I in rec2.current]
+    if type(baseline) == list and len(baseline) == len(tails):
+        rec2.tail_baseline = baseline
+    else:
+        rec2.tail_baseline = [np.median(I[-median_len:]) for I in tails]
+    rec2.tails = [tail-base for tail,base in zip(tails,rec2.tail_baseline)]
+    
+    t = np.arange(len(rec2.tails[0])) + rec2.tail_cut - tail_start
+    
+    rec2.pdecay = fit_exp2(rec2.tails, t, min_tau)
+    return rec2.pdecay
+    
+    
+def fit_exp2(tails, t, min_tau = 1):
+    '''Fit tail currents to a double exponential. Both components are forced to have the same sign.
+    Returns: a list of vectors [a1, tau1, a2, tau2] to fit each trace with exp2_decay.'''
+    # Bounding LM to positive or negative values only using transformation
+    # See: http://cars9.uchicago.edu/software/python/lmfit/bounds.html
+    # See: https://github.com/jjhelmus/leastsqbound-scipy
+    def pos_to_unlimited(p):
+        return np.sqrt((p + 1)**2 - 1) # neg_to_unlimited is sqrt((-p+1)**2 - 1)
+    def bounded_to_internal(p):
+        return (pos_to_unlimited(abs(p[0])), p[1], pos_to_unlimited(abs(p[2])), p[3])
+    init_cond = bounded_to_internal((.3,130, .03,7500))
+    
+    def zero_bounded(p): # Convert unlimited value to bounded positive value
+        return -1 + np.sqrt(p**2 + 1)
+    def pos_bounded(p):
+        return (zero_bounded(p[0]), p[1], zero_bounded(p[2]), p[3])
+    def neg_bounded(p):
+        return (-zero_bounded(p[0]), p[1], -zero_bounded(p[2]), p[3])
 
+    p = [[]] * len(tails)
+    for i in range(len(tails)):
+        ret_pos = scipy.optimize.least_squares(lambda p, x, y: (exp2_decay(x, pos_bounded(p)) - y), init_cond,
+                                               args = (t, tails[i]), method='lm')
+        ret_neg = scipy.optimize.least_squares(lambda p, x, y: (exp2_decay(x, neg_bounded(p)) - y), init_cond,
+                                               args = (t, tails[i]), method='lm')
+        if i > 0:
+            ini = bounded_to_internal(p[i-1])
+            ret_ipos = scipy.optimize.least_squares(lambda p, x, y: (exp2_decay(x, pos_bounded(p)) - y), ini,
+                                                   args = (t, tails[i]), method='lm')
+            ret_ineg = scipy.optimize.least_squares(lambda p, x, y: (exp2_decay(x, neg_bounded(p)) - y), ini,
+                                                   args = (t, tails[i]), method='lm')
+            rets = (ret_pos, ret_ipos, ret_neg, ret_ineg)
+            idx = np.argmin(map(lambda r: r.cost, rets))
+            if idx < 2:
+                pp = list(pos_bounded(rets[idx].x))
+            else:
+                pp = list(neg_bounded(rets[idx].x))
+        else:
+            if ret_pos.cost < ret_neg.cost:
+                pp = list(pos_bounded(ret_pos.x))
+            else:
+                pp = list(neg_bounded(ret_neg.x))
+        
+        if pp[1] < min_tau: print "Trace", i, "truncated fast tau", pp[1]; pp[0] = 0. 
+        if pp[3] < min_tau: print "Trace", i, "truncated fast tau", pp[3]; pp[2] = 0.
+        p[i] = tuple(pp)
+        
+    return p
+    
+    
 # In[8]:
 
 
@@ -155,7 +242,7 @@ def plot_tail_fit(rec2, params, begin, end, tres, traces):
     
     plt.gca().set_prop_cycle(None)
     for i in traces:
-        plt.plot(tx, rec2.current[i][begin:end] - rec2.tail_baseline[i])
+        plt.plot(tx, rec2.current[i][begin:end] - rec2.tail_baseline[i], alpha=0.5)
     
     plt.gca().set_prop_cycle(None)
     for i in traces:
@@ -164,29 +251,56 @@ def plot_tail_fit(rec2, params, begin, end, tres, traces):
     plt.xlabel('Time after step [ms]')
     plt.ylabel(u'Current [μA]')
     
+def plot_tail_fit_exp2(rec2, params, begin, end, tres, traces):
+    '''Plots measured and double exponential fitted tail currents.'''
+    t = np.arange(begin, end) - rec2.tail_start
+    tx = t * tres
     
-def fit_capacitance(rec3, dt, offset, stepdur, nsteps = 10):
+    plt.gca().set_prop_cycle(None)
+    for i in traces:
+        plt.plot(tx, rec2.current[i][begin:end] - rec2.tail_baseline[i], alpha=0.5)
+    
+    plt.gca().set_prop_cycle(None)
+    for i in traces:
+        plt.plot(tx, exp2_decay(t, rec2.pdecay[i]), linewidth = 1)
+    
+    plt.xlabel('Time after step [ms]')
+    plt.ylabel(u'Current [μA]')
+    
+    if begin < rec2.tail_cut and end > rec2.tail_cut:
+        fit_at_cut = exp2_decay(rec2.tail_cut-rec2.tail_start, np.transpose(rec2.pdecay))
+        cut_limits = min(fit_at_cut), max(fit_at_cut)
+        plt.ylim(2*cut_limits[0]-cut_limits[1], 2*cut_limits[1]-cut_limits[0])
+    
+    
+def fit_capacitance(rec3, dt, offset, stepdur, nsteps = 9):
     '''
     Calculate and return the capacitance in nF from a series of VC steps between two voltages:
     C = integral(I_step, dt) / dV
     Baseline for the current at each step is the mean current measured during the final 25% of the step.
     '''
-    currents = [np.array(rec3.current[0][i:i+stepdur]) for i in np.arange(nsteps/2)*stepdur + offset]
+    currents = [np.array(rec3.current[0][i:i+stepdur]) for i in np.arange(nsteps)*stepdur + offset]
     voltages = [np.median(rec3.voltage[0][:offset])] + \
                [np.median(rec3.voltage[0][i:i+stepdur]) for i in np.arange(nsteps)*stepdur + offset]
     C = [0]*len(currents)
     
     for (i, I, dV) in zip(range(len(C)), currents, np.diff(voltages)):
         # Find steady-state current
-        steadystate = np.mean(I[stepdur*3/4:])
+        steadystate = np.median(I[stepdur*3/4:])
         
-        # Normalise trace to steady state
-        I = np.abs(I - steadystate)
-        
-        # Establish noise level at normalised steady state
-        noise = np.mean(I[stepdur*3/4:])
-        
-        # Integrate, correcting for noise (integral over the baseline section alone ought to be zero)
-        C[i] = np.sum(I-noise) * dt / abs(dV)
+        # Integrate, correcting for steady state (integral over the baseline section alone ought to be zero)
+        C[i] = np.sum(I-steadystate) * dt / dV
 
     return np.mean(C) * 1e3 # Capacitance in nF
+
+
+
+def mad(x):
+    return np.median(np.absolute(np.median(x)-x))
+
+
+def linear_exclude_outliers(X, Y, tolerance = 5):
+    p = np.polyfit(X, Y, 1)
+    residuals = np.array([p[0]*x + p[1] - y for x,y in zip(X, Y)])
+    zMAD = (residuals-np.median(residuals))/mad(residuals)
+    return np.nonzero(np.absolute(zMAD) < tolerance)
