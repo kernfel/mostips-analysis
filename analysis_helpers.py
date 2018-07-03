@@ -282,7 +282,7 @@ def fit_capacitance(rec3, dt, offset, stepdur, nsteps = 9):
     currents = [np.array(rec3.current[0][i:i+stepdur]) for i in np.arange(nsteps)*stepdur + offset]
     voltages = [np.median(rec3.voltage[0][:offset])] + \
                [np.median(rec3.voltage[0][i:i+stepdur]) for i in np.arange(nsteps)*stepdur + offset]
-    C = [0]*len(currents)
+    C = [None]*len(currents)
     
     for (i, I, dV) in zip(range(len(C)), currents, np.diff(voltages)):
         # Find steady-state current
@@ -290,6 +290,24 @@ def fit_capacitance(rec3, dt, offset, stepdur, nsteps = 9):
         
         # Integrate, correcting for steady state (integral over the baseline section alone ought to be zero)
         C[i] = np.sum(I-steadystate) * dt / dV
+
+    return np.mean(C) * 1e3 # Capacitance in nF
+
+
+def fit_capacitance_rec(rec, dt, offset, stepdur, nTraces = 7):
+    currents = [np.array(I[offset:offset + stepdur])
+                for I in rec.current[:nTraces]]
+    voltages = [np.median(V[:offset]) - np.median(V[offset:offset + stepdur])
+                for V in rec.voltage[:nTraces]]
+    spikes = [(I, dV) for I, dV in zip(currents, voltages) if abs(dV) > 5]
+    C = [None]*len(spikes)
+
+    for (i, (I, dV)) in zip(range(len(C)), spikes):
+        # Find steady-state current
+        steadystate = np.median(I[stepdur*3/4:])
+
+        # Integrate, correcting for steady state (integral over the baseline section alone ought to be zero)
+        C[i] = -np.sum(I-steadystate) * dt / dV
 
     return np.mean(C) * 1e3 # Capacitance in nF
 
