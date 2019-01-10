@@ -322,3 +322,38 @@ def linear_exclude_outliers(X, Y, tolerance = 5):
     residuals = np.array([p[0]*x + p[1] - y for x,y in zip(X, Y)])
     zMAD = (residuals-np.median(residuals))/mad(residuals)
     return np.nonzero(np.absolute(zMAD) < tolerance)
+
+def bounded_LM_fit(fun, p0, args, bounds):
+    # see http://cars9.uchicago.edu/software/python/lmfit/bounds.html
+    def bounds_funcs(lower, upper):
+        internal = lambda x: np.arcsin(2*(x-lower)/(upper-lower) - 1)
+        bounded = lambda x: lower + (np.sin(x)+1) * (upper-lower)/2
+        return internal, bounded
+    def upper_bounds_funcs(upper):
+        internal = lambda x: np.sqrt((upper-x+1)**2 - 1)
+        bounded = lambda x: upper + 1 - np.sqrt(x*x + 1)
+        return internal, bounded
+    def lower_bounds_funcs(lower):
+        internal = lambda x: np.sqrt((x-lower+1)**2 - 1)
+        bounded = lambda x: lower - 1 + np.sqrt(x*x + 1)
+        return internal, bounded
+
+    assert len(p0) == len(bounds[0]) == len(bounds[1])
+
+    conv = [None]*len(p0)
+    for i, (lo, hi) in enumerate(zip(bounds[0], bounds[1])):
+        if lo == -np.inf and hi == np.inf:
+            conv[i] = (lambda p:p, lambda q:q)
+        elif lo == -np.inf:
+            conv[i] = upper_bounds_funcs(hi)
+        elif hi == np.inf:
+            conv[i] = lower_bounds_funcs(lo)
+        else:
+            conv[i] = bounds_funcs(lo, hi)
+
+    p0u = [c[0](p) for c,p in zip(conv, p0)]
+    funwrap = lambda q, x, y: fun([c[1](p) for c,p in zip(conv, q)], x, y)
+
+    ret = scipy.optimize.least_squares(funwrap, p0u, args=args, method='lm')
+    ret.x = np.array([c[1](p) for c,p in zip(conv, ret.x)])
+    return ret
