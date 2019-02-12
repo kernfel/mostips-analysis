@@ -28,14 +28,18 @@ rec3_stepdur = 2000
 rec3_nsteps = 9
 
 class Analysis:
-    def __init__(self, filebase, filenos, factor = 1):
-        self.savebase = filebase[:-4] % filenos[0] + '-' + str(filenos[2] or filenos[1])
-        self.paramsfile = filebase[:-4] % filenos[3] + '.params'
+    def __init__(self, filebase, in_filenos, out_filenos = (), factor = 1):
+        self.savebase = filebase[:-4] % in_filenos[0] + '-' + str(in_filenos[2] or in_filenos[1])
+        self.filebase = filebase
+        self.out_filenos = out_filenos or (in_filenos[3],)
+        self.paramsfile = filebase[:-4] % self.out_filenos[0] + '.params'
         self.params = dict()
-        
-        self.rec = read_2channel_ATF(filebase % filenos[0], current_factor = factor)
-        self.rec2 = read_2channel_ATF(filebase % filenos[1], current_factor = factor)
-        self.rec3 = read_2channel_ATF(filebase % filenos[2]) if filenos[2] else None
+
+        self.rec = read_2channel_ATF(filebase % in_filenos[0], current_factor = factor)
+        self.rec2 = read_2channel_ATF(filebase % in_filenos[1], current_factor = factor)
+        self.rec3 = read_2channel_ATF(filebase % in_filenos[2]) if in_filenos[2] else None
+
+        self.factor = factor
     
     def fit(self):
         self.fit_leak()
@@ -91,6 +95,13 @@ C:\t%(C)f nF\n'
         return string % params_rtdo
     
     def write(self):
-        f = open(self.paramsfile, 'w')
-        f.write(self.params_str())
-        f.close()
+        gl = params['g_leak']
+        for fno in self.out_filenos:
+            rec = read_2channel_ATF(filebase % fno, current_factor = self.factor)
+            buffer_end = len(rec.voltage[0]) / 64
+            g = get_gleak(rec, self.params['E_leak'], (0, buffer_end) )
+            self.params['g_leak'] = np.mean(g)
+            f = open(self.filebase[:-4] % fno + '.params', 'w')
+            f.write(self.params_str())
+            f.close()
+        params['g_leak'] = gl
