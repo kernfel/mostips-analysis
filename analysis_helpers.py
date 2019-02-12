@@ -58,33 +58,44 @@ def fit_IV(currents, voltages, params, postfix):
 
 # In[5]:
 
-def fit_leak(rec, params, ax = None, limits = (5200, 44800)):
+def fit_leak(rec, params, ax = None, step = (5200, 44800), hold = (0, 4925)):
     '''
     Finds the leak conductance parameters from a family of steps (holding to variable potential)
-    and deposits the values in params. Argument `limits` defines the index range during which
-    the voltage is stepped to the test potential.
-    If given an axes to draw on, an I-V plot is drawn with the data and the best fit line.
+    and deposits the values in params. Argument `step` defines the index range during which
+    the voltage is stepped to the test potential, while `hold` defines the pre-step holding duration.
+    Only traces stepping at least 4 mV below the holding potential are considered.
+    Given the possibility of changing g_leak across the recording, each step is considered separately,
+    and the mean g_leak and E_leak found from each hold/step pair saved to params.
+    If given an axes to draw on, a full I-V plot is drawn with the data and the best fit line.
     '''
 
     # Get the peak current and median voltage for each step:
-    peak_currents = [np.max(I[limits[0]:limits[1]]) for I in rec.current]
-    median_voltages = [np.median(V[limits[0]:limits[1]]) for V in rec.voltage]
-
-    # Get the median currents to fit the leak current
-    median_currents = [np.median(I[limits[0]:limits[1]]) for I in rec.current]
-
-    # Find cutoff: Include all negative currents, and all voltages < -50
-    for i in range(len(median_currents)-1, 0, -1):
-        if median_currents[i] < 0 or median_voltages[i] < -50:
-            fit_to = i+1
-            break
+    step_voltages = [np.median(V[step[0]:step[1]]) for V in rec.voltage]
+    hold_voltages = [np.median(V[hold[0]:hold[1]]) for V in rec.voltage]
     
-    # Fit
-    fit_IV(median_currents[:fit_to], median_voltages[:fit_to], params, 'leak')
+    # Get gl/El from each hold/downward-step pair
+    sum_g = 0
+    sum_E = 0
+    n = 0
+    for i in range(len(rec.voltage)):
+        if hold_voltages[i]-4 > step_voltages[i]:
+            Ihold = np.median(rec.current[i][hold[0]:hold[1]])
+            Istep = np.median(rec.current[i][step[0]:step[1]])
+            gl = (Ihold-Istep) / (hold_voltages[i]-step_voltages[i])
+            El = hold_voltages[i] - Ihold/gl
+            sum_g += gl
+            sum_E += El
+            n += 1
+    
+    # Record the average
+    params['g_leak'] = sum_g/n
+    params['E_leak'] = sum_E/n
+    params['I_leak'] = lambda V, g = params['g_leak']: (V-params['E_leak'])*g
 
     # Draw
     if ax != None:
-        IVplot(peak_currents, median_voltages, ax)
+        peak_currents = [np.max(I[step[0]:step[1]]) for I in rec.current]
+        IVplot(peak_currents, step_voltages, ax)
 
         leak_plot_V = np.array([-120, 50])
         ax.plot(leak_plot_V, params['I_leak'](leak_plot_V))
