@@ -11,6 +11,7 @@ tres = 0.025
 
 # The start and end of the activation step, with some room for the capacitive current to dissipate:
 rec_limits = (5200, 44800)
+rec_hold = (0, 4925)
 
 # The true step time
 rec_step_t0 = 4937
@@ -27,15 +28,19 @@ rec3_stepdur = 2000
 rec3_nsteps = 9
 
 class Analysis:
-    def __init__(self, filebase, filenos, factor = 1):
-        self.savebase = filebase[:-4] % filenos[0] + '-' + str(filenos[2] or filenos[1])
-        self.paramsfile = filebase[:-4] % filenos[3] + '.params'
+    def __init__(self, filebase, in_filenos, out_filenos = (), factor = 1):
+        self.savebase = filebase[:-4] % in_filenos[0] + '-' + str(in_filenos[2] or in_filenos[1])
+        self.filebase = filebase
+        self.out_filenos = out_filenos or (in_filenos[3],)
+        self.paramsfile = filebase[:-4] % self.out_filenos[0] + '.params'
         self.params = dict()
-        
-        self.rec = read_2channel_ATF(filebase % filenos[0], current_factor = factor)
-        self.rec2 = read_2channel_ATF(filebase % filenos[1], current_factor = factor)
-        self.rec3 = read_2channel_ATF(filebase % filenos[2]) if filenos[2] else None
-    
+
+        self.rec = read_2channel_ATF(filebase % in_filenos[0], current_factor = factor)
+        self.rec2 = read_2channel_ATF(filebase % in_filenos[1], current_factor = factor)
+        self.rec3 = read_2channel_ATF(filebase % in_filenos[2]) if in_filenos[2] else None
+
+        self.factor = factor
+
     def fit(self):
         self.fit_leak()
         self.fit_EK()
@@ -43,7 +48,7 @@ class Analysis:
         self.fit_C()
     
     def fit_leak(self):
-        fit_leak(self.rec, self.params, None, rec_limits)
+        fit_leak(self.rec, self.params, None, rec_limits, rec_hold)
     
     def fit_EK(self):
         fit_tails_exp2(self.rec2, rec2_limits[0], rec2_limits[1])
@@ -65,8 +70,9 @@ class Analysis:
         
     def fit_gK(self):
         median_voltages = [np.median(V[rec_limits[0]:rec_limits[1]]) for V in self.rec.voltage]
-        peak_currents = [np.max(I[rec_limits[0]:rec_limits[1]]) - self.params['I_leak'](V)
-                         for I,V in zip(self.rec.current, median_voltages)]
+        g_leak = get_gleak(self.rec, self.params['E_leak'], rec_hold)
+        peak_currents = [np.max(I[rec_limits[0]:rec_limits[1]]) - self.params['I_leak'](V, g)
+                         for I,V,g in zip(self.rec.current, median_voltages, g_leak)]
 
         self.params['g_K'] = 1.05*peak_currents[-1] / (median_voltages[-1] - self.params['E_K'])
     
@@ -96,6 +102,13 @@ C:\t%(C)f nF\n'
         return string % params_rtdo
     
     def write(self):
-        f = open(self.paramsfile, 'w')
-        f.write(self.params_str())
-        f.close()
+        gl = params['g_leak']
+        for fno in self.out_filenos:
+            rec = read_2channel_ATF(filebase % fno, current_factor = self.factor)
+            buffer_end = len(rec.voltage[0]) / 64
+            g = get_gleak(rec, self.params['E_leak'], (0, buffer_end) )
+            self.params['g_leak'] = np.mean(g)
+            f = open(self.filebase[:-4] % fno + '.params', 'w')
+            f.write(self.params_str())
+            f.close()
+        params['g_leak'] = gl
