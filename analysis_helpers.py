@@ -100,6 +100,18 @@ def fit_leak(rec, params, ax = None, step = (5200, 44800), hold = (0, 4925)):
         leak_plot_V = np.array([-120, 50])
         ax.plot(leak_plot_V, params['I_leak'](leak_plot_V))
 
+def get_gleak(rec, E_leak, hold):
+    '''
+    Finds the leak conductance for each trace in rec in the window specified by hold (typically the prepulse holding period),
+    under the assumption that the specified holding period is uncontaminated by non-leak currents.
+    '''
+    g = np.zeros(len(rec.voltage))
+    for i in range(len(rec.voltage)):
+        V = np.median(rec.voltage[i][hold[0]:hold[1]])
+        I = np.median(rec.current[i][hold[0]:hold[1]])
+        g[i] = I / (V - E_leak)
+    return g
+
 
 # In[6]:
 
