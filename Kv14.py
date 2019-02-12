@@ -11,6 +11,7 @@ tres = 0.025
 
 # The start and end of the activation step, with some room for the capacitive current to dissipate:
 rec_limits = (5050, 44800)
+rec_hold = (0, 4925)
 
 # The true step time
 rec_step_t0 = 4937
@@ -43,7 +44,7 @@ class Analysis:
         self.fit_C()
     
     def fit_leak(self):
-        fit_leak(self.rec, self.params, None, rec_limits)
+        fit_leak(self.rec, self.params, None, rec_limits, rec_hold)
     
     def fit_EK(self):
         fit_tails_exp2(self.rec2, rec2_limits[0], rec2_limits[1])
@@ -58,8 +59,9 @@ class Analysis:
         
     def fit_gK(self):
         median_voltages = [np.median(V[rec_limits[0]:rec_limits[1]]) for V in self.rec.voltage]
-        peak_currents = [np.max(I[rec_limits[0]:rec_limits[1]]) - self.params['I_leak'](V)
-                         for I,V in zip(self.rec.current, median_voltages)]
+        g_leak = get_gleak(self.rec, self.params['E_leak'], rec_hold)
+        peak_currents = [np.max(I[rec_limits[0]:rec_limits[1]]) - self.params['I_leak'](V, g)
+                         for I,V,g in zip(self.rec.current, median_voltages, g_leak)]
 
         self.params['g_A'] = 1.05*peak_currents[-1] / (median_voltages[-1] - self.params['E_K'])
     
