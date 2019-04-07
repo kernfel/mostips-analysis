@@ -102,13 +102,13 @@ C:\t%(C)f nF\n'
         return string % params_rtdo
     
     def write(self):
-        gl = params['g_leak']
+        gl = self.params['g_leak']
         for fno in self.out_filenos:
-            rec = read_2channel_ATF(filebase % fno, current_factor = self.factor)
+            rec = read_2channel_ATF(self.filebase % fno, current_factor = self.factor)
             buffer_end = len(rec.voltage[0]) / 64
             g = get_gleak(rec, self.params['E_leak'], (0, buffer_end) )
             self.params['g_leak'] = np.mean(g)
             f = open(self.filebase[:-4] % fno + '.params', 'w')
             f.write(self.params_str())
             f.close()
-        params['g_leak'] = gl
+        self.params['g_leak'] = gl
