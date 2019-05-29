@@ -28,7 +28,7 @@ rec3_stepdur = 2000
 rec3_nsteps = 9
 
 class Analysis:
-    def __init__(self, filebase, in_filenos, out_filenos = (), factor = 1):
+    def __init__(self, filebase, in_filenos, out_filenos = (), factor = 1, out_factor = 1):
         self.savebase = filebase[:-4] % in_filenos[0] + '-' + str(in_filenos[2] or in_filenos[1])
         self.filebase = filebase
         self.out_filenos = out_filenos or (in_filenos[3],)
@@ -40,6 +40,7 @@ class Analysis:
         self.rec3 = read_2channel_ATF(filebase % in_filenos[2]) if in_filenos[2] else None
 
         self.factor = factor
+        self.out_factor = out_factor
 
     def fit(self):
         self.fit_leak()
@@ -104,7 +105,7 @@ C:\t%(C)f nF\n'
     def write(self):
         gl = self.params['g_leak']
         for fno in self.out_filenos:
-            rec = read_2channel_ATF(self.filebase % fno, current_factor = self.factor)
+            rec = read_2channel_ATF(self.filebase % fno, current_factor = self.out_factor)
             buffer_end = len(rec.voltage[0]) / 64
             g = get_gleak(rec, self.params['E_leak'], (0, buffer_end) )
             self.params['g_leak'] = np.mean(g)
