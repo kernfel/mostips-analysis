@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scipy.optimize
 import stfio
+import operator
 
 
 # In[2]:
@@ -123,7 +124,45 @@ def exp2_decay(t, p):
     return p[0]*np.exp(-t/p[1]) + p[2]*np.exp(-t/p[3])
 
 
-# In[7]:
+def find_turns(filtered, prominence, op = operator.gt):
+    diff = np.diff(filtered)
+    turns = []
+    for t,dI in enumerate(diff):
+        if op(dI, 0):
+            count = count + 1
+            if count == prominence:
+                turns.append(t - count)
+                op = operator.lt if op==operator.gt else operator.gt
+                count = 0
+        else:
+            count = 0
+    return turns
+
+def find_last_consensus_turn(currents, tail_start, consensus = 0.5, filter_width = 21, prominence = 25):
+    '''
+    Finds the time of the last peak or trough after the tail step common to a fraction (@a consensus) of traces.
+    Peaks/troughs are located on a blackman-filtered version of the traces and must be at least @a prominence
+    samples apart from other peaks/troughs.
+    '''
+    w = np.blackman(filter_width)
+    w = w/w.sum()
+    wlen = filter_width
+    lo,hi = tail_start, tail_start+500
+    all_filtered = [np.convolve(w, I[lo-wlen:hi+wlen], mode='same')[wlen:-wlen] for I in currents]
+    
+    turns = [0] * len(all_filtered)
+    cumhist = np.zeros(20)
+    for i, filtered in enumerate(all_filtered):
+        turns[i] = find_turns(filtered, prominence)
+        cumhist[:len(turns[i])] += 1
+    
+    for i, n in enumerate(cumhist):
+        if n < consensus * len(all_filtered):
+            ts = []
+            for t in turns:
+                if len(t) >= i:
+                    ts.append(t[i-1])
+            return np.median(ts) + lo
 
 def get_tail_cut(rec2, tail_start):
     '''Returns the index of the latest maximum of the last n current trace's tail current'''
@@ -142,8 +181,11 @@ def get_tail_cut(rec2, tail_start):
     if latest == 0:
         latest = tail_max_med[-1][0]
     
+    # Get a second opinion with a different method
+    latest_consensus = find_last_consensus_turn(rec2.current, tail_start)
+    
     # Return the latest positive peak and the number of negative traces
-    return latest, len(tail_max_positives) - np.count_nonzero(tail_max_positives)
+    return max(latest, latest_consensus), len(tail_max_positives) - np.count_nonzero(tail_max_positives)
 
 
 def fit_tails(rec2, tail_start = 4750, tail_end = 44000, median_len = 4000, baseline = None):
