@@ -108,7 +108,7 @@ def state_at(t, V, state, p = np.concatenate((nsA, hsA, nfA, hfA, taunsA, tauhsA
     
     nfinf = sigmoid(p[5:7], V)
     taunf = taun(p[19:24], V)
-    nf = nsinf - (nfinf-state[2]) * np.exp(-t/taunf)
+    nf = nfinf - (nfinf-state[2]) * np.exp(-t/taunf)
 
     hfinf = sigmoid_min(p[7:10], V)
     tauhf = tauh(p[24:28], V)
