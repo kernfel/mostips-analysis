@@ -138,7 +138,7 @@ def find_turns(filtered, prominence, op = operator.gt):
             count = 0
     return turns
 
-def find_last_consensus_turn(currents, tail_start, consensus = 0.5, filter_width = 21, prominence = 25):
+def find_last_consensus_turn(currents, tail_start, consensus = 0.5, filter_width = 21, prominence = 20):
     '''
     Finds the time of the last peak or trough after the tail step common to a fraction (@a consensus) of traces.
     Peaks/troughs are located on a blackman-filtered version of the traces and must be at least @a prominence
@@ -162,7 +162,7 @@ def find_last_consensus_turn(currents, tail_start, consensus = 0.5, filter_width
             for t in turns:
                 if len(t) >= i:
                     ts.append(t[i-1])
-            return np.median(ts) + lo
+            return int(np.median(ts)) + lo
 
 def get_tail_cut(rec2, tail_start):
     '''Returns the index of the latest maximum of the last n current trace's tail current'''
