@@ -27,6 +27,46 @@ rec3_offset = 322
 rec3_stepdur = 2000
 rec3_nsteps = 9
 
+# 2018 kinetics
+nK = [-13.7, 14.8]
+hK = [5.8, -3.9]
+sK = [-19.7, 11.1]
+
+taunK = [5., 110., 36., 18., -17.]
+tauhK = [200., 8e3, 5e4, -30., -16., 15.]
+tausK = [25., 500., 36., 18., -17.]
+
+p_kinetic = np.concatenate((nK, taunK, hK, tauhK, sK, tausK))
+#                          0:2, 2:7, 7:9, 9:15, 15:17, 17:22
+
+def sigmoid(p, v):
+    return 1/(1+np.exp((p[0]-v)/p[1]))
+
+def taun(p, V):
+    return p[0] + p[1]/(np.exp((p[2]+V)/p[3]) + np.exp((p[2]+V)/p[4]))
+
+def tauh(p, V):
+    lexp = np.exp((V-p[3])/p[4])
+    rexp = np.exp((V-p[3])/p[5])
+    return p[0] + p[1]/(1+lexp) + p[2]/(lexp + rexp)
+
+def state_at(t, V, state, p = p_kinetic):
+    '''Calculates the state (n,h,s) after @a t ms of holding at @a V mV from an initial @a state'''
+    
+    _ninf = sigmoid(p[0:2], V)
+    _taun = taun(p[2:7], V)
+    n = _ninf - (_ninf-state[0]) * np.exp(-t/_taun)
+
+    _hinf = sigmoid(p[7:9], V)
+    _tauh = tauh(p[9:15], V)
+    h = _hinf - (_hinf-state[1]) * np.exp(-t/_tauh)
+    
+    _sinf = sigmoid(p[15:17], V)
+    _taus = taun(p[17:22], V)
+    s = _sinf - (_sinf-state[2]) * np.exp(-t/_taus)
+    
+    return (n,h,s)
+
 class Analysis:
     def __init__(self, filebase, in_filenos, out_filenos = (), factor = 1, out_factor = 1):
         self.savebase = filebase[:-4] % in_filenos[0] + '-' + str(in_filenos[2] or in_filenos[1])
@@ -99,8 +139,45 @@ C:\t%(C)f nF\n'
             if params_rtdo.has_key(key):
                 params_rtdo[key] *= 1e3
                 string = string + key + ':\t%(' + key + ')f μS\n'
+                
+        string = string % params_rtdo
 
-        return string % params_rtdo
+        if hasattr(self, 'kparams'):
+            string = string + self.k_params_str()
+        
+        return string
+        
+    def k_params_str(self):
+        # (nK, taunK, hK, tauhK, sK, tausK)
+        string = """\
+gK_fast_k:\t%f μS
+gK_slow_k:\t%f μS
+nK_mid:\t%f mV
+nK_slope:\t%f
+taunK_min:\t%f ms
+taunK_max:\t%f ms
+taunK_off:\t%f ms
+taunK_slope1:\t%f
+taunK_slope2:\t%f
+hK_mid:\t%f mV
+hK_slope:\t%f
+tauhK_lmin:\t%f ms
+tauhK_rmin:\t%f ms
+tauhK_max:\t%f ms
+tauhK_mid:\t%f ms
+tauhK_lslope:\t%f
+tauhK_rslope:\t%f
+sK_mid:\t%f mV
+sK_slope:\t%f
+tausK_min:\t%f ms
+tausK_max:\t%f ms
+tausK_off:\t%f ms
+tausK_slope1:\t%f
+tausK_slope2:\t%f
+"""
+        factors = np.ones(len(self.kparams))
+        factors[0] = factors[1] = 1e3
+        return string % tuple(factors * self.kparams)
     
     def write(self):
         gl = self.params['g_leak']
