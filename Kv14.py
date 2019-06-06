@@ -56,6 +56,9 @@ tauhsA = [120., 5e3, 72., 8.]
 taunfA = [1., 22., 65., 18., -32.]
 tauhfA = [35., 5e3, 72., 7.]
 
+p_kinetic = np.concatenate((nsA, hsA, nfA, hfA, taunsA, tauhsA, taunfA, tauhfA))
+#                           0:2, 2:5, 5:7, 7:10, 10:15, 15:19,  19:24,  24:28
+
 # 2-component time scales, common voltage dependency
 # Tentative values
 ncA = [-44.2, 17.8]
@@ -94,8 +97,7 @@ def state_at_single(t, V, state, p = np.concatenate((n1A, h1A, taun1A, tauh1A)))
     
     return (n, h)
 
-def state_at(t, V, state, p = np.concatenate((nsA, hsA, nfA, hfA, taunsA, tauhsA, taunfA, tauhfA))):
-    #                                         0:2, 2:5, 5:7, 7:10, 10:15, 15:19,  19:24,  24:28
+def state_at(t, V, state, p = p_kinetic):
     '''Calculates the 2-component state (ns,hs,nf,hf) after @a t ms of holding at @a V mV from an initial @a state'''
     
     nsinf = sigmoid(p[0:2], V)
