@@ -130,7 +130,7 @@ class Analysis:
         else:
             self.params['C'] = fit_capacitance_rec(self.rec, tres, rec_step_t0, rec3_stepdur)
             
-    def params_str(self):
+    def params_str(self, pdict = {}):
         string = '\
 gl:\t%(g_leak)f μS\n\
 El:\t%(E_leak)f mV\n\
@@ -146,6 +146,9 @@ C:\t%(C)f nF\n'
             if params_rtdo.has_key(key):
                 params_rtdo[key] *= 1e3
                 string = string + key + ':\t%(' + key + ')f μS\n'
+        for key, (factor, units) in pdict.items():
+            params_rtdo[key] *= factor
+            string = string + key + ':\t%(' + key + ')f' + units + '\n'
                 
         string = string % params_rtdo
 
@@ -186,7 +189,7 @@ tausK_slope2:\t%f
         factors[0] = factors[1] = 1e3
         return string % tuple(factors * self.kparams)
     
-    def write(self):
+    def write(self, pdict = {}):
         gl = self.params['g_leak']
         for fno in self.out_filenos:
             rec = read_2channel_ATF(self.filebase % fno, current_factor = self.out_factor)
@@ -194,6 +197,6 @@ tausK_slope2:\t%f
             g = get_gleak(rec, self.params['E_leak'], (0, buffer_end) )
             self.params['g_leak'] = np.mean(g)
             f = open(self.filebase[:-4] % fno + '.params', 'w')
-            f.write(self.params_str())
+            f.write(self.params_str(pdict))
             f.close()
         self.params['g_leak'] = gl
