@@ -34,30 +34,41 @@ taun1A = [2., 102., 45., 6., -40.]
 tauh1A = [35., 1e4, 72., 7.]
 
 # 2-component kinetics
-# # 2018 fit, median voltage
-# nsA = [-47.,15.]
-# hsA = [-60.,-7.,.02]
-# nfA = [-47.,15.]
-# hfA = [-60.,-7.,.02]
-
-# taunsA = [4., 62., 85., 28., -20.]
-# tauhsA = [120., 10e3, 72., 8.]
-# taunfA = [1., 20., 65., 20., -32.]
-# tauhfA = [35., 5e3, 72., 7.]
-
-# 2019 classical fit, median voltage
-nsA = [-50., 15.]
-hsA = [-60.,-7.,.08]
-nfA = [-50., 15.]
+# 2018 fit, median voltage
+nsA = [-47.,15.]
+hsA = [-60.,-7.,.02]
+nfA = [-47.,15.]
 hfA = [-60.,-7.,.02]
 
-taunsA = [4., 62., 85., 26., -20.]
-tauhsA = [120., 5e3, 72., 8.]
-taunfA = [1., 22., 65., 18., -32.]
+taunsA = [4., 62., 85., 28., -20.]
+tauhsA = [120., 10e3, 72., 8.]
+taunfA = [1., 20., 65., 20., -32.]
 tauhfA = [35., 5e3, 72., 7.]
 
-p_kinetic = np.concatenate((nsA, hsA, nfA, hfA, taunsA, tauhsA, taunfA, tauhfA))
+# 2019 classical fit, median voltage
+# nsA = [-50., 15.]
+# hsA = [-60.,-7.,.08]
+# nfA = [-50., 15.]
+# hfA = [-60.,-7.,.02]
+
+# taunsA = [4., 62., 85., 26., -20.]
+# tauhsA = [120., 5e3, 72., 8.]
+# taunfA = [1., 22., 65., 18., -32.]
+# tauhfA = [35., 5e3, 72., 7.]
+
+# p_kinetic = np.concatenate((nsA, hsA, nfA, hfA, taunsA, tauhsA, taunfA, tauhfA))
 #                           0:2, 2:5, 5:7, 7:10, 10:15, 15:19,  19:24,  24:28
+p_kinetic = np.concatenate((nsA, taunsA, hsA, tauhsA, nfA, taunfA, hfA, tauhfA))
+#                           0:2, 2:7,    7:10 10:14   14:16 16:21  21:24 24:28
+
+def x_ns(p): return p[0:2]
+def x_tauns(p): return p[2:7]
+def x_hs(p): return p[7:10]
+def x_tauhs(p): return p[10:14]
+def x_nf(p): return p[14:16]
+def x_taunf(p): return p[16:21]
+def x_hf(p): return p[21:24]
+def x_tauhf(p): return p[24:28]
 
 # 2-component time scales, common voltage dependency
 # Tentative values
@@ -100,20 +111,20 @@ def state_at_single(t, V, state, p = np.concatenate((n1A, h1A, taun1A, tauh1A)))
 def state_at(t, V, state, p = p_kinetic):
     '''Calculates the 2-component state (ns,hs,nf,hf) after @a t ms of holding at @a V mV from an initial @a state'''
     
-    nsinf = sigmoid(p[0:2], V)
-    tauns = taun(p[10:15], V)
+    nsinf = sigmoid(x_ns(p), V)
+    tauns = taun(x_tauns(p), V)
     ns = nsinf - (nsinf-state[0]) * np.exp(-t/tauns)
 
-    hsinf = sigmoid_min(p[2:5], V)
-    tauhs = tauh(p[15:19], V)
+    hsinf = sigmoid_min(x_hs(p), V)
+    tauhs = tauh(x_tauhs(p), V)
     hs = hsinf - (hsinf-state[1]) * np.exp(-t/tauhs)
     
-    nfinf = sigmoid(p[5:7], V)
-    taunf = taun(p[19:24], V)
+    nfinf = sigmoid(x_nf(p), V)
+    taunf = taun(x_taunf(p), V)
     nf = nfinf - (nfinf-state[2]) * np.exp(-t/taunf)
 
-    hfinf = sigmoid_min(p[7:10], V)
-    tauhf = tauh(p[24:28], V)
+    hfinf = sigmoid_min(x_hf(p), V)
+    tauhf = tauh(x_tauhf(p), V)
     hf = hfinf - (hfinf-state[3]) * np.exp(-t/tauhf)
     
     return (ns, hs, nf, hf)

@@ -39,6 +39,13 @@ tausK = [25., 500., 36., 18., -17.]
 p_kinetic = np.concatenate((nK, taunK, hK, tauhK, sK, tausK))
 #                          0:2, 2:7, 7:9, 9:15, 15:17, 17:22
 
+def x_n(p): return p[0:2]
+def x_taun(p): return p[2:7]
+def x_h(p): return p[7:9]
+def x_tauh(p): return p[9:15]
+def x_s(p): return p[15:17]
+def x_taus(p): return p[17:22]
+
 def sigmoid(p, v):
     return 1/(1+np.exp((p[0]-v)/p[1]))
 
@@ -53,16 +60,16 @@ def tauh(p, V):
 def state_at(t, V, state, p = p_kinetic):
     '''Calculates the state (n,h,s) after @a t ms of holding at @a V mV from an initial @a state'''
     
-    _ninf = sigmoid(p[0:2], V)
-    _taun = taun(p[2:7], V)
+    _ninf = sigmoid(x_n(p), V)
+    _taun = taun(x_taun(p), V)
     n = _ninf - (_ninf-state[0]) * np.exp(-t/_taun)
 
-    _hinf = sigmoid(p[7:9], V)
-    _tauh = tauh(p[9:15], V)
+    _hinf = sigmoid(x_h(p), V)
+    _tauh = tauh(x_tauh(p), V)
     h = _hinf - (_hinf-state[1]) * np.exp(-t/_tauh)
     
-    _sinf = sigmoid(p[15:17], V)
-    _taus = taun(p[17:22], V)
+    _sinf = sigmoid(x_s(p), V)
+    _taus = taun(x_taus(p), V)
     s = _sinf - (_sinf-state[2]) * np.exp(-t/_taus)
     
     return (n,h,s)
