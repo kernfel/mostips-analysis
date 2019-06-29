@@ -57,19 +57,18 @@ def set_box_color(bp, color):
     plt.setp(bp['caps'], color=color)
     plt.setp(bp['medians'], color=color)
 
-def boxplot(data, group_names, param_names): # data: (groups, params, datapoints)
+def boxplot(data, group_names, param_names): # data: (groups, datapoints, params)
     numg, nump = len(group_names), len(param_names)
 
     for i, group in enumerate(data):
         line, = plt.plot([], label=group_names[i])
         col = line.get_color()
-        b = plt.boxplot(group.T, positions=np.arange(i, (numg+1)*nump, (numg+1)),
+        b = plt.boxplot(group, positions=np.arange(i, (numg+1)*nump, (numg+1)),
                         widths=0.8, flierprops={'markeredgecolor':col})
         set_box_color(b, col)
 
     plt.xticks(np.arange((numg-1)/2., (numg+1)*nump, numg+1), param_names)
     plt.xlim(-1, (numg+1)*nump-1)
-    plt.ylim(ymin=0)
     plt.legend()
 
 class Session:
@@ -314,9 +313,10 @@ class Session:
         ''' norm_data: (groups, fits, epochs, subpops) '''
         fig_setup(ylabel='Parameter space distance (a.u.)', **kwargs)
         eps = kwargs.get('boxplot_epochs', boxplot_epochs)
-        boxplot([np.moveaxis(group[:,np.array(eps)-1,:], 1, 0).reshape(len(eps), -1)
+        boxplot([np.moveaxis(group[:,np.array(eps)-1,:], 1, 2).reshape(-1, len(eps))
                  for group in norm_data],
                 self.gnames, eps)
+        plt.ylim(ymin=0)
         plt.suptitle(title)
         f = self.figname(figname + '-box')
         plt.savefig(f)
@@ -325,42 +325,88 @@ class Session:
 
 ####################### Validation ###############################
 
-    def plot_validation(self, median, cross, **kwargs):
+    def plot_all_validation(self, **kwargs):
+        for median in [True, False]:
+            for cross in [True, False]:
+                for norm in [True, False]:
+                    self.plot_validation(median, cross, norm, **kwargs)
+
+    def plot_validation(self, median, cross, norm, **kwargs):
         if median:
             src_key = 'median'
-            src_title = 'population median models'
+            src_title = 'median models'
         else:
             src_key = 'lowerr'
-            src_title = 'lowest fitting cost models'
-        if cross:
-            data_key = src_key + '_xvalidation'
-            target_key = 'target_xvalidation'
-            title = self.modelname + ': Cross-validation error (%s, all protocols)' % src_title
-            figname = 'xvalidation-' + src_key
-        else:
-            data_key = src_key + '_validation'
-            target_key = 'target_validation'
-            title = self.modelname + ': Validation error (%s, target observations)' % src_title
-            figname = 'validation-' + src_key
+            src_title = 'best-fit models'
 
-        fig,ax = fig_setup(xlabel='Epoch', ylabel='RMS current error (nA)', **kwargs)
+        if norm:
+            norm_key = 'lognorm'
+            norm_title = 'log norm error relative to classical fit'
+            ylabel = 'log norm error ($\ln(\epsilon/\epsilon_0)$)'
+        else:
+            norm_key = 'err'
+            norm_title = 'error'
+            ylabel = 'RMS current error (nA)'
+
+        if cross:
+            val_key = 'xvalidation'
+            title = self.modelname + ': Cross-validation %s (%s, all data)' % (norm_title, src_title)
+        else:
+            val_key = 'validation'
+            title = self.modelname + ': Validation %s (%s, target observations)' % (norm_title, src_title)
+
+        data_key = src_key + '_' + val_key
+        target_key = 'target_' + val_key
+        figname = val_key + '-' + src_key + '-' + norm_key
+
+        ## Time series
+        fig,ax = fig_setup(xlabel='Epoch', ylabel=ylabel, **kwargs)
         lines = []
         pctile = kwargs.get('percentile', percentile)
-        # data: (subpop, epoch)
+        validation = []
+        validation_target = []
         for i, gname in enumerate(self.gnames):
             group = [row for row in self.index_by_group(gname)]
 
-            val = np.concatenate([row[data_key] for row in group], axis=0)
+            # row[data_key]: (subpop, epoch)
+            # row[target_key]: single value
+            # val: (pop, epoch)
+
+            if norm:
+                val = np.log(np.concatenate([row[data_key] / row[target_key] for row in group], axis=0))
+            else:
+                val = np.concatenate([row[data_key] for row in group], axis=0)
+
             line = plot_single_shaded(ax, np.percentile(val, [100-pctile, 50, pctile], axis=0))
             lines.append(line)
+            validation.append(val) # (group, pop, epoch)
 
-            val_target = np.array([row[target_key] for row in group])
-            box = plt.boxplot(val_target.reshape(-1,1), positions=(self.n_epochs + 10 + 10*i,), widths=10,
-                              flierprops = {'markeredgecolor': line.get_color()}, manage_xticks = False)
-            set_box_color(box, line.get_color())
-        plt.xlim((-0.05*self.n_epochs, 1.05*(self.n_epochs+10+10*len(self.gnames))))
+            if not norm:
+                val_target = np.array([row[target_key] for row in group])
+                validation_target.append(val_target) # (group, fit)
+                box = plt.boxplot(val_target.reshape(-1,1), positions=(self.n_epochs + 10 + 10*i,), widths=10,
+                                  flierprops = {'markeredgecolor': line.get_color()}, manage_xticks = False)
+                set_box_color(box, line.get_color())
+
+        if not norm:
+            plt.xlim((-0.05*self.n_epochs, 1.05*(self.n_epochs+10+10*len(self.gnames))))
         plt.legend(lines, self.gnames)
         plt.suptitle(title)
-        figname = self.figname(figname)
-        plt.savefig(figname)
-        print figname
+        f = self.figname(figname)
+        plt.savefig(f)
+        print f
+
+        ## Boxes
+        fig_setup(ylabel=ylabel, **kwargs)
+        eps = kwargs.get('boxplot_epochs', boxplot_epochs)
+        selected_validation = [val[:,np.array(eps)-1] for val in validation]
+        if norm:
+            plt.axhline(0, color = 'gray', ls = 'dotted')
+            boxplot(selected_validation, self.gnames, eps)
+        else:
+            val_all = [sel.T.tolist() + tar[None,:].tolist() for sel,tar in zip(selected_validation, validation_target)]
+            boxplot(val_all, self.gnames, list(eps) + ['classical fit'])
+        plt.suptitle(title)
+        f = self.figname(figname + '-box')
+        plt.savefig(f)
+        print f
