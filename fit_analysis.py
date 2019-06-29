@@ -120,6 +120,7 @@ class Session:
         self.n_epochs = max(row['n_epochs'] for row in self.index)
 
     def load_data(self):
+        failed = []
         for row in self.index:
             row['n_epochs'] = int(row['n_epochs'])
             row['n_pop'] = int(row['n_pop'])
@@ -156,7 +157,6 @@ class Session:
             row['median'] = np.median(row['data'], axis=3) # (n_epochs, nparams, n_subpops)
 
             # Load validations and crossvalidations
-            failed = []
             for val_type in ['median_validation', 'lowerr_validation', 'median_xvalidation', 'lowerr_xvalidation']:
                 try:
                     with open(fit + '.' + val_type) as datafile:
@@ -207,14 +207,16 @@ class Session:
             fstr = '-'.join(self.filt) + '_'
         return self.path + '/' + self.figbase.replace('%g', '-'.join(self.gnames)).replace('%f_', fstr) + '_' + name + '.' + fmt
 
-    def plot_all(self, **kwargs):
-        self.plot_all_convergence(**kwargs)
+    def plot_all(self, figbase = None, **kwargs):
+        if figbase:
+            figbase_bk = self.figbase
+            self.figbase = figbase_bk
 
-        self.plot_validation(True, True, **kwargs)
-        self.plot_validation(False, True, **kwargs)
-        self.plot_validation(True, False, **kwargs)
-        self.plot_validation(False, False, **kwargs)
-        plt.close('all')
+        self.plot_all_convergence(**kwargs)
+        self.plot_all_validation(**kwargs)
+
+        if figbase:
+            self.figbase = figbase_bk
 
 
 ############# Convergence ###################
@@ -410,3 +412,5 @@ class Session:
         f = self.figname(figname + '-box')
         plt.savefig(f)
         print f
+
+        plt.close('all')
