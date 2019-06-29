@@ -77,24 +77,24 @@ class Session:
         self.path = path
         self.modelname = modelname
         self.figbase = "figure_%f_%g"
-        self.save_figures = True
 
         # Load index
         with open(path + '/' + index_file) as ifile:
             self.index = [row for row in csv.DictReader(ifile, delimiter = '\t')]
 
-        # Extract group names
+        # Extract names
         self.gnames_raw = []
+        self.cnames = []
+        self.recnames = []
         for row in self.index:
             if row['group'] not in self.gnames_raw:
                 self.gnames_raw.append(row['group'])
-        self.set_groups(self.gnames_raw)
-
-        # Extract cell names
-        self.cnames = []
-        for row in self.index:
             if row['cell'] not in self.cnames:
                 self.cnames.append(row['cell'])
+            if row['record'] not in self.recnames:
+                self.recnames.append(row['record'])
+
+        self.set_groups(self.gnames_raw)
 
         # Load param names and deltabar-normalised sigmata
         with open(path + '/../../paramnames') as pfile:
@@ -140,18 +140,21 @@ class Session:
                     row['data'] = np.fromfile(datafile, dtype=np.dtype(np.float32)).reshape(
                         (row['n_epochs'], self.nparams, row['n_subpops'], row['subpop_sz']))
 
-            # Load step sizes
-            with open(fit + '.steps') as datafile:
-                # steptype: (params)
-                # steps: (n_subpops, params, epochs)
-                row['steptype'] = np.fromfile(datafile, dtype=np.dtype(np.int8), count = self.nparams)
-                if np.any(row['steptype'] > 1):
-                    assert np.all(row['steptype'] == row['n_subpops']), "DE multipopulation step type must equal n_subpops."
-                    row['steps'] = np.fromfile(datafile, dtype=np.dtype(np.float32)).reshape(
-                        (row['n_subpops'], self.nparams, row['n_epochs']))
+            # Load errors to determine lowest-cost models
+            # row['lowerr']: (n_epochs, nparams, n_subpops)
+            with open(fit + '.errs') as errfile:
+                if int(row['subpop_split']):
+                    errs = np.fromfile(errfile, dtype=np.dtype(np.float32)).reshape(
+                        (row['n_epochs'], 2, row['n_subpops'], row['subpop_sz']/2))\
+                        .swapaxes(1,2).reshape(
+                        (row['n_epochs'], row['n_subpops'], row['subpop_sz']))
                 else:
-                    steps = np.fromfile(datafile, dtype=np.dtype(np.float32)).reshape((self.nparams, row['n_epochs']))
-                    row['steps'] = np.array([steps] * row['n_subpops'])
+                    errs = np.fromfile(errfile, dtype=np.dtype(np.float32)).reshape(
+                        (row['n_epochs'], row['n_subpops'], row['subpop_sz']))
+                indices = np.argmin(errs, axis=2)
+                row['lowerr'] = row['data'][np.ogrid[:row['n_epochs'], :self.nparams, :row['n_subpops']] + [indices[:,None,:]]]
+
+            row['median'] = np.median(row['data'], axis=3) # (n_epochs, nparams, n_subpops)
 
             # Load validations and crossvalidations
             failed = []
@@ -180,8 +183,8 @@ class Session:
             self.group_mapping[name] = [g for g in self.gnames_raw
                                         if name in g and
                                         (   (filt == None) or
-                                            (type(filter) == str and filt in g) or
-                                            (type(filter) == list and np.any([f in g for f in filt]))
+                                            (type(filt) == str and filt in g) or
+                                            (type(filt) == list and np.any([f in g for f in filt]))
                                         )]
         self.gnames = self.group_mapping.keys()
         self.filt = filt
@@ -205,16 +208,8 @@ class Session:
             fstr = '-'.join(self.filt) + '_'
         return self.path + '/' + self.figbase.replace('%g', '-'.join(self.gnames)).replace('%f_', fstr) + '_' + name + '.' + fmt
 
-    def plot_all(self, save_figures = True, **kwargs):
-        self.save_figures = save_figures
-
-        self.plot_convergence(True, **kwargs)
-        self.plot_convergence(False, **kwargs)
-        plt.close('all')
-
-        self.plot_spread(True, **kwargs)
-        self.plot_spread(False, **kwargs)
-        plt.close('all')
+    def plot_all(self, **kwargs):
+        self.plot_all_convergence(**kwargs)
 
         self.plot_validation(True, True, **kwargs)
         self.plot_validation(False, True, **kwargs)
@@ -225,263 +220,107 @@ class Session:
 
 ############# Convergence ###################
 
-    def plot_convergence(self, raw, **kwargs):
-        if raw:
-            title = self.modelname + ': Convergence (median absolute deviation from population median)'
-            figname = 'raw-convergence'
-        else:
-            title = self.modelname + ': Convergence with reference (population medians\' absolute deviation from reference p.v.)'
-            figname = 'ref-convergence'
+    def plot_all_convergence(self, **kwargs):
+        plot_convergence('popstd', **kwargs)
+        for reftype in ['popmad', 'cell', 'record', 'external']:
+            for center in ['median', 'lowerr']:
+                self.plot_convergence(reftype, center, **kwargs)
 
-        self.plot_convergence_box(raw, title, figname, **kwargs)
+    def plot_convergence(self, reftype, center = 'median', **kwargs):
+        ref_title = dict(   popstd = 'within populations (stddev)',
+                            popmad = 'within populations (MAD)',
+                            cell = 'across fits to the same cell',
+                            record = 'across fits to the same data',
+                            external = 'with classical fit'
+                        )
+        assert ref_title.has_key(reftype), 'Valid reftypes: ' + ', '.join(ref_title.keys())
+        assert center in ['median', 'lowerr']
+        figname = 'convergence_' + center + '_' + reftype
+        if reftype == 'popstd':
+            conv = ': Convergence '
+            figname = 'convergence_' + reftype
+        if center == 'median':
+            conv = ': Median model convergence '
+        elif center == 'lowerr':
+            conv = ': Best-fit model convergence '
+        title = self.modelname + conv + ref_title[reftype]
 
-    def plot_convergence_grid(self, raw, title, figname, **kwargs):
-        ''' return: (groups, fits, epochs, params, subpops) '''
-        fig,ax = grid_setup(self.pnames, **kwargs)
-        param_convergence = []
-        lines = []
-        pctile = kwargs.get('percentile', percentile)
+        data = self.get_convergence(reftype, center) # (groups, fits, epochs, params, subpops)
+        norm_data = [np.linalg.norm(np.divide(group, self.sigmata[None,None,:,None]), axis=2) for group in data] # (groups, fits, epochs, subpops)
+        if reftype == 'external':
+            self.plot_grid(title + ' (abs)', figname + '-abs', np.abs(data), **kwargs)
+        self.plot_grid(title, figname, data, **kwargs)
+        self.plot_norm(title, figname, norm_data, **kwargs)
+        self.plot_boxes(title, figname, norm_data, **kwargs)
+        plt.close('all')
+
+    def get_convergence(self, reftype, center):
+        ''' output: (groups, fits, epochs, params, subpops) '''
+        convergence = []
         for gname in self.gnames:
-            rows = self.index_by_group(gname)
-            # data: (epochs, params, subpops, subpop_sz)
-            # mads: (fits, epochs, params, subpops)
-            # convergence: (epochs, params)
-            if raw:
-                mads = [np.median(np.abs(row['data'] - np.median(row['data'], axis=3)[:,:,:,None]), axis=3) for row in rows]
-            else:
-                mads = [np.abs(np.median(row['data'], axis=3) - row['reference'][None,:,None]) for row in rows]
-            if len(mads) == 0:
-                continue
-            param_convergence.append(mads) # (groups, fits, epochs, params, subpops)
-            convergence = np.percentile(mads, [100-pctile, 50, pctile], axis=(0,3))
-            lines.append(plot_with_shade(ax, convergence))
-        plt.figlegend(lines, self.gnames, 'upper right')
-        plt.suptitle(title)
-        figname = self.figname(figname)
-        plt.savefig(figname)
-        print figname
+            gdata = [row for row in self.index_by_group(gname)]
 
-        return param_convergence
+            # row['data']: (epochs, params, subpops, nmodels)
+            # row['median'/'lowerr']: (epochs, params, subpops)
+            # row['reference']: (params)
+            # group_convergence: (fits, epochs, params, subpops)
 
-    def plot_convergence_norm(self, raw, title, figname, param_convergence = None, **kwargs):
-        '''
-        param_convergence: (groups, fits, epochs, params, subpops)
-        output: (groups, fits, epochs, subpops)
-        '''
-        if param_convergence == None:
-            param_convergence = self.plot_convergence_grid(raw, title, figname, **kwargs)
+            if reftype == 'popmad':
+                group_convergence = [np.median(np.abs(row['data'] - row[center][:,:,:,None]), axis=3)
+                                     for row in gdata]
+            elif reftype == 'popstd':
+                group_convergence = [np.std(row['data'], axis=3) for row in gdata]
+            elif reftype == 'cell':
+                ref = dict()
+                for cname in self.cnames:
+                    ref[cname] = np.median([row[center] for row in gdata if row['cell'] == cname], axis=(0,3)) # (epochs, params)
+                group_convergence = [ref[row['cell']][:,:,None] - row[center] for row in gdata]
+            elif reftype == 'record':
+                ref = dict()
+                for recname in self.recnames:
+                    ref[recname] = np.median([row['median'] for row in gdata if row['record'] == recname], axis=(0,3)) # (epochs, params)
+                group_convergence = [ref[row['record']][:,:,None] - row[center] for row in gdata]
+            elif reftype == 'external':
+                group_convergence = [row['reference'][None,:,None] - row[center] for row in gdata]
 
-        fig,ax = fig_setup(xlabel='Epoch', ylabel='Parameter space distance (a.u.)', **kwargs)
-        norm_convergence = [np.linalg.norm(np.divide(conv, self.sigmata[None,None,:,None]), axis=2) for conv in param_convergence]
+            convergence.append(group_convergence)
+        return convergence
 
+    def plot_grid(self, title, figname, data, **kwargs):
+        ''' data: (groups, fits, epochs, params, subpops) '''
+        fig,ax = grid_setup(self.pnames, **kwargs)
         pctile = kwargs.get('percentile', percentile)
-        lines = [plot_single_shaded(ax, np.percentile(distances, [100-pctile, 50, pctile], axis=(0,2))) for distances in norm_convergence]
+        pctiles = [np.percentile(group, [100-pctile, 50, pctile], axis=(0,3)) for group in data]
+        lines = [plot_with_shade(ax, group) for group in pctiles]
+        plt.figlegend(lines, self.gnames, 'upper right');
+        plt.suptitle(title)
+        f = self.figname(figname)
+        plt.savefig(f)
+        print f
+
+    def plot_norm(self, title, figname, norm_data, **kwargs):
+        ''' norm_data: (groups, fits, epochs, subpops) '''
+        fig,ax = fig_setup(xlabel='Epoch', ylabel='Parameter space distance (a.u.)', **kwargs)
+        pctile = kwargs.get('percentile', percentile)
+        pctiles = [np.percentile(group, [100-pctile, 50, pctile], axis=(0,2)) for group in norm_data]
+        lines = [plot_single_shaded(ax, group) for group in pctiles]
         plt.figlegend(lines, self.gnames, 'upper right')
         plt.suptitle(title)
-        figname = self.figname(figname + '-norm')
-        plt.savefig(figname)
-        print figname
+        f = self.figname(figname + '-norm')
+        plt.savefig(f)
+        print f
 
-        return norm_convergence
-
-    def plot_convergence_box(self, raw, title, figname, norm_convergence = None, **kwargs):
-        '''
-        norm_convergence: (groups, fits, epochs, subpops)
-        '''
-        if norm_convergence == None:
-            norm_convergence = self.plot_convergence_norm(raw, title, figname, **kwargs)
-
+    def plot_boxes(self, title, figname, norm_data, **kwargs):
+        ''' norm_data: (groups, fits, epochs, subpops) '''
         fig_setup(ylabel='Parameter space distance (a.u.)', **kwargs)
         eps = kwargs.get('boxplot_epochs', boxplot_epochs)
-        boxplot([np.moveaxis(conv[:,np.array(eps)-1,:], 1, 0).reshape(len(eps), -1)
-                 for conv in norm_convergence],
+        boxplot([np.moveaxis(group[:,np.array(eps)-1,:], 1, 0).reshape(len(eps), -1)
+                 for group in norm_data],
                 self.gnames, eps)
         plt.suptitle(title)
-        figname = self.figname(figname + '-box')
-        plt.savefig(figname)
-        print figname
-
-
-#################### Spread ######################
-
-    def plot_spread(self, variance, **kwargs):
-        if variance:
-            title = self.modelname + ': Standard deviation of population medians'
-            figname = 'spread-stddev'
-        else:
-            title = self.modelname + ': Range of population medians'
-            figname = 'spread-range'
-        self.plot_spread_grid(variance, title, figname, **kwargs)
-        self.plot_spread_stepnorm_box(variance, title, figname, **kwargs)
-        self.plot_spread_signorm_box(variance, title, figname, **kwargs)
-
-    def plot_spread_grid(self, variance, title, figname, **kwargs):
-        fig,ax = grid_setup(self.pnames, **kwargs)
-        lines = []
-        pctile = kwargs.get('percentile', percentile)
-        for gname in self.gnames:
-            group = [row for row in self.index_by_group(gname)]
-            group_var = []
-            for cname in self.cnames:
-                rows = self.index_by_cell(cname, group)
-                # data: (epochs, params, subpops, subpop_sz)
-                medians = [np.median(row['data'], axis=3) for row in rows] # (fits, epochs, params, subpops)
-                if len(medians) == 0:
-                    continue
-                if variance:
-                    var = np.std(medians, axis=(0,3)) # (epochs, params)
-                else:
-                    var = np.max(medians, axis=(0,3)) - np.min(medians, axis=(0,3)) # (epochs, params)
-                group_var.append(var) # (cells, epochs, params)
-            spread = np.percentile(group_var, [100-pctile, 50, pctile], axis=0)
-            lines.append(plot_with_shade(ax, spread))
-        plt.figlegend(lines, self.gnames, 'upper right')
-        plt.suptitle(title)
-        figname = self.figname(figname)
-        plt.savefig(figname)
-        print figname
-
-    def plot_spread_stepnorm_grid(self, variance, title, figname, **kwargs):
-        ''' output: (groups, cells, epochs, params) '''
-        fig,ax = grid_setup(self.pnames, **kwargs)
-        lines = []
-        pctile = kwargs.get('percentile', percentile)
-        stepnorm_spread = []
-        for gname in self.gnames:
-            group = [row for row in self.index_by_group(gname)]
-            group_var = []
-            for cname in self.cnames:
-                rows = [row for row in self.index_by_cell(cname, group)]
-                if len(rows) == 0:
-                    continue
-                # data: (epochs, params, subpops, subpop_sz)
-                # steps: (subpops, params, epochs)
-                multiplicative_rows = filter(lambda r: np.any(r['steptype'] == 0), rows)
-                for row in multiplicative_rows:
-                    mask = row['steptype'] == 0
-                    medians = np.median(row['data'], axis=3) # (epochs, params, subpops)
-                    med_step = np.median(row['steps'], axis=0) # (params, epochs)
-                    med_step[mask] = np.log(med_step[mask] + 1)
-                    if variance:
-                        mean = np.mean(medians, axis=2).T
-                        std = np.std(medians, axis=2).T
-                        std[mask] = np.log((mean[mask] + std[mask]) / mean[mask])
-                        var = std / med_step
-                    else:
-                        min_median, max_median = np.min(medians, axis=2).T, np.max(medians, axis=2).T # (params, epochs)
-                        min_median[mask] = np.log(min_median[mask])
-                        max_median[mask] = np.log(max_median[mask])
-                        med_step[mask] = np.log(med_step[mask] + 1)
-                        var = (max_median - min_median) / med_step
-                    group_var.append(var.T) # (cells, epochs, params)
-
-                additive_rows = filter(lambda r: np.all(r['steptype'] > 0), rows)
-                if len(additive_rows) > 0:
-                    medians = [np.median(row['data'], axis=3) for row in additive_rows] # (fits, epochs, params, subpops)
-                    med_step = np.median([row['steps'] for row in additive_rows], axis=(0,1)) # (params, epochs)
-                    if variance:
-                        var = np.std(medians, axis=(0,3))
-                    else:
-                        var = np.max(medians, axis=(0,3)) - np.min(medians, axis=(0,3)) # (epochs, params)
-                    group_var.append(var / med_step.T) # (cells, epochs, params)
-
-
-
-
-#                medians = [np.median(row['data'], axis=3) for row in rows] # (fits, epochs, params, subpops)
-#                med_step = np.median([row['steps'] for row in rows], axis=(0,1)) # (params, epochs)
-
-#                if np.any([row['steptype'] == 0 for row in rows]): # steptype==0 <=> multiplicative step size
-#                    for row in rows:
-#                        assert np.all((row['steptype']>0) == (rows[0]['steptype']>0)), 'Step type cannot differ within (group,cell) set.'
-#                    mask = multiplicative_rows[0]['steptype'] == 0
-#                    med_step[mask] = np.log(med_step[mask] + 1)
-#                    if variance:
-#                        mean = np.mean(medians, axis=(0,3)).T
-#                        std = np.std(medians, axis=(0,3)).T
-#                        std[mask] = np.log((mean[mask]+std[mask]) / mean[mask])
-#                        var = std / med_step
-#                    else:
-#                        min_median, max_median = np.min(medians, axis=(0,3)).T, np.max(medians, axis=(0,3)).T # (params, epochs)
-#                        min_median[mask] = np.log(min_median[mask])
-#                        max_median[mask] = np.log(max_median[mask])
-#                        med_step[mask] = np.log(med_step[mask] + 1)
-#                        var = (max_median - min_median) / med_step
-#                    group_var.append(var.T) # (cells, epochs, params)
-#                else:
-#                    if variance:
-#                        var = np.std(medians, axis=(0,3))
-#                    else:
-#                        var = np.max(medians, axis=(0,3)) - np.min(medians, axis=(0,3)) # (epochs, params)
-#                    group_var.append(var / med_step.T) # (cells, epochs, params)
-            spread = np.percentile(group_var, [100-pctile, 50, pctile], axis=0)
-            lines.append(plot_with_shade(ax, spread))
-            stepnorm_spread.append(np.array(group_var)) # (groups, cells, epochs, params)
-        plt.figlegend(lines, self.gnames, 'upper right')
-        plt.suptitle(title + ', normalised by step size')
-        figname = self.figname(figname + '-stepnorm')
-        plt.savefig(figname)
-        print figname
-
-        return stepnorm_spread
-
-    def plot_spread_stepnorm_box(self, variance, title, figname, stepnorm_spread = None, **kwargs):
-        ''' stepnorm_spread: (groups, cells, epochs, params) '''
-        if stepnorm_spread == None:
-            stepnorm_spread = self.plot_spread_stepnorm_grid(variance, title, figname, **kwargs)
-
-        for epoch in kwargs.get('boxplot_epochs', boxplot_epochs):
-            fig_setup(ylabel = 'Stepsize-normalised spread (a.u.)', **kwargs)
-            boxplot([cons[:,epoch-1,:].T for cons in stepnorm_spread], self.gnames, self.pnames)
-            plt.suptitle(title + ', epoch %d' % epoch)
-            fign = self.figname(figname + '-stepnorm-box-ep%d' % epoch)
-            plt.savefig(fign)
-            print fign
-
-    def plot_spread_signorm(self, variance, title, figname, **kwargs):
-        ''' output: (groups, cells, epochs) '''
-        fig,ax = fig_setup(xlabel='Epoch', ylabel='Parameter space distance (a.u.)', **kwargs)
-        lines = []
-        pctile = kwargs.get('percentile', percentile)
-        signorm_spread = []
-        for gname in self.gnames:
-            group = [row for row in self.index_by_group(gname)]
-            group_var = []
-            for cname in self.cnames:
-                rows = [row for row in self.index_by_cell(cname, group)]
-                if len(rows) == 0:
-                    continue
-                # data: (epochs, params, subpops, subpop_sz)
-                # sigmata: (nparams,)
-                medians = [np.median(row['data'], axis=3) for row in rows] # (fits, epochs, params, subpops)
-                if variance:
-                    var = np.std(medians, axis=(0,3))
-                else:
-                    var = np.max(medians, axis=(0,3)) - np.min(medians, axis=(0,3)) # (epochs, params)
-                group_var.append(np.linalg.norm(var / self.sigmata, axis=1)) # (cells, epochs)
-            spread = np.percentile(group_var, [100-pctile, 50, pctile], axis=0)
-            lines.append(plot_single_shaded(ax, spread))
-            signorm_spread.append(np.array(group_var)) # (groups, cells, epochs)
-        plt.legend(lines, self.gnames)
-        plt.suptitle(title)
-        figname = self.figname(figname + '-signorm')
-        plt.savefig(figname)
-        print figname
-
-        return signorm_spread
-
-    def plot_spread_signorm_box(self, variance, title, figname, signorm_spread = None, **kwargs):
-        ''' signorm_spread: (groups, cells, epochs) '''
-        if signorm_spread == None:
-            signorm_spread = self.plot_spread_signorm(variance, title, figname, **kwargs)
-
-        fig_setup(ylabel='Parameter space distance (a.u.)', **kwargs)
-        eps = kwargs.get('boxplot_epochs', boxplot_epochs)
-        boxplot([cons[:,np.array(eps)-1].T for cons in signorm_spread], self.gnames, eps)
-        plt.suptitle(title)
-        figname = self.figname(figname + '-signorm-box')
-        plt.savefig(figname)
-        print figname
+        f = self.figname(figname + '-box')
+        plt.savefig(f)
+        print f
 
 
 ####################### Validation ###############################
@@ -510,6 +349,7 @@ class Session:
         # data: (subpop, epoch)
         for i, gname in enumerate(self.gnames):
             group = [row for row in self.index_by_group(gname)]
+
             val = np.concatenate([row[data_key] for row in group], axis=0)
             line = plot_single_shaded(ax, np.percentile(val, [100-pctile, 50, pctile], axis=0))
             lines.append(line)
