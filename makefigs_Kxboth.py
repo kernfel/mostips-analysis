@@ -11,8 +11,10 @@ groups = [{'names': ['cluster', 'bubble']},
 S = fa.Session('/home/kernfel/Documents/Data/RTDO/Kx_both/sessions/2019.06.20-17.46.33/',
                'full.index', 'Kv2.1x + Kv1.4x')
 
-S.plot_all(figbase='fig_all_')
+kwargs = dict(rows = 4, cols = 2, figsize_grid = (15, 15))
+
+S.plot_all(figbase='fig_all_', **kwargs)
 
 for g in groups:
     S.set_groups(**g)
-    S.plot_all()
+    S.plot_all(**kwargs)

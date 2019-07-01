@@ -210,7 +210,7 @@ class Session:
     def plot_all(self, figbase = None, **kwargs):
         if figbase:
             figbase_bk = self.figbase
-            self.figbase = figbase_bk
+            self.figbase = figbase
 
         self.plot_all_convergence(**kwargs)
         self.plot_all_validation(**kwargs)
@@ -222,7 +222,7 @@ class Session:
 ############# Convergence ###################
 
     def plot_all_convergence(self, **kwargs):
-        plot_convergence('popstd', **kwargs)
+        self.plot_convergence('popstd', **kwargs)
         for reftype in ['popmad', 'cell', 'record', 'external']:
             for center in ['median', 'lowerr']:
                 self.plot_convergence(reftype, center, **kwargs)
@@ -247,10 +247,13 @@ class Session:
         title = self.modelname + conv + ref_title[reftype]
 
         data = self.get_convergence(reftype, center) # (groups, fits, epochs, params, subpops)
+        abs_data = [np.abs(group) for group in data]
         norm_data = [np.linalg.norm(np.divide(group, self.sigmata[None,None,:,None]), axis=2) for group in data] # (groups, fits, epochs, subpops)
-        if reftype == 'external':
-            self.plot_grid(title + ' (abs)', figname + '-abs', np.abs(data), **kwargs)
-        self.plot_grid(title, figname, data, **kwargs)
+
+        if reftype in ['cell', 'record', 'external']:
+            self.plot_grid(title + ' (abs)', figname + '-abs', abs_data, **kwargs)
+        if reftype in ['popmad', 'popstd', 'external']:
+            self.plot_grid(title, figname, data, **kwargs)
         self.plot_norm(title, figname, norm_data, **kwargs)
         self.plot_boxes(title, figname, norm_data, **kwargs)
         plt.close('all')
@@ -273,13 +276,17 @@ class Session:
                 group_convergence = [np.std(row['data'], axis=3) for row in gdata]
             elif reftype == 'cell':
                 ref = dict()
+                g_cnames = [row['cell'] for row in gdata]
                 for cname in self.cnames:
-                    ref[cname] = np.median([row[center] for row in gdata if row['cell'] == cname], axis=(0,3)) # (epochs, params)
+                    if cname in g_cnames:
+                        ref[cname] = np.median([row[center] for row in gdata if row['cell'] == cname], axis=(0,3)) # (epochs, params)
                 group_convergence = [ref[row['cell']][:,:,None] - row[center] for row in gdata]
             elif reftype == 'record':
                 ref = dict()
+                g_recnames = [row['record'] for row in gdata]
                 for recname in self.recnames:
-                    ref[recname] = np.median([row['median'] for row in gdata if row['record'] == recname], axis=(0,3)) # (epochs, params)
+                    if recname in g_recnames:
+                        ref[recname] = np.median([row['median'] for row in gdata if row['record'] == recname], axis=(0,3)) # (epochs, params)
                 group_convergence = [ref[row['record']][:,:,None] - row[center] for row in gdata]
             elif reftype == 'external':
                 group_convergence = [row['reference'][None,:,None] - row[center] for row in gdata]
@@ -297,6 +304,7 @@ class Session:
         plt.suptitle(title)
         f = self.figname(figname)
         plt.savefig(f)
+        plt.close(fig)
         print f
 
     def plot_norm(self, title, figname, norm_data, **kwargs):
@@ -309,11 +317,12 @@ class Session:
         plt.suptitle(title)
         f = self.figname(figname + '-norm')
         plt.savefig(f)
+        plt.close(fig)
         print f
 
     def plot_boxes(self, title, figname, norm_data, **kwargs):
         ''' norm_data: (groups, fits, epochs, subpops) '''
-        fig_setup(ylabel='Parameter space distance (a.u.)', **kwargs)
+        fig,ax = fig_setup(ylabel='Parameter space distance (a.u.)', **kwargs)
         eps = kwargs.get('boxplot_epochs', boxplot_epochs)
         boxplot([np.moveaxis(group[:,np.array(eps)-1,:], 1, 2).reshape(-1, len(eps))
                  for group in norm_data],
@@ -322,6 +331,7 @@ class Session:
         plt.suptitle(title)
         f = self.figname(figname + '-box')
         plt.savefig(f)
+        plt.close(fig)
         print f
 
 
@@ -390,16 +400,19 @@ class Session:
                                   flierprops = {'markeredgecolor': line.get_color()}, manage_xticks = False)
                 set_box_color(box, line.get_color())
 
-        if not norm:
+        if norm:
+            plt.axhline(0, color = 'gray', ls = 'dotted')
+        else:
             plt.xlim((-0.05*self.n_epochs, 1.05*(self.n_epochs+10+10*len(self.gnames))))
         plt.legend(lines, self.gnames)
         plt.suptitle(title)
         f = self.figname(figname)
         plt.savefig(f)
+        plt.close(fig)
         print f
 
         ## Boxes
-        fig_setup(ylabel=ylabel, **kwargs)
+        fig,ax = fig_setup(ylabel=ylabel, **kwargs)
         eps = kwargs.get('boxplot_epochs', boxplot_epochs)
         selected_validation = [val[:,np.array(eps)-1] for val in validation]
         if norm:
@@ -411,6 +424,5 @@ class Session:
         plt.suptitle(title)
         f = self.figname(figname + '-box')
         plt.savefig(f)
+        plt.close(fig)
         print f
-
-        plt.close('all')
