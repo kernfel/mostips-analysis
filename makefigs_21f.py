@@ -8,7 +8,8 @@ groups = [{'names': ['DE', 'xGA', 'mGA']},
           {'names': ['cluster', 'bubble'], 'filt': 'xGA'},
           {'names': ['cluster', 'bubble'], 'filt': 'mGA'},
           {'names': ['strategy 1', 'strategy 2', 'strategy 3'], 'filt': ['DE', 'cluster']},
-          {'names': ['strategy 1', 'strategy 2', 'strategy 3'], 'filt': ['DE', 'bubble']}
+          {'names': ['strategy 1', 'strategy 2', 'strategy 3'], 'filt': ['DE', 'bubble']},
+          {'names': ['DE', 'GA'], 'filt': 'strategy 3'}
          ]
 
 S = fa.Session('/home/kernfel/Documents/Data/RTDO/Kv21x_fixed/sessions/2019.06.19-12.16.08/',

@@ -72,7 +72,7 @@ def boxplot(data, group_names, param_names): # data: (groups, datapoints, params
     plt.legend()
 
 class Session:
-    def __init__(self, path, index_file, modelname):
+    def __init__(self, path, index_file, modelname, load = True):
         self.path = path
         self.modelname = modelname
         self.figbase = "figure_%f_%g"
@@ -94,6 +94,7 @@ class Session:
                 self.recnames.append(row['record'])
 
         self.set_groups(self.gnames_raw)
+        self.exclude_cells(None)
 
         # Load param names and deltabar-normalised sigmata
         with open(path + '/../../paramnames') as pfile:
@@ -115,9 +116,9 @@ class Session:
                         pass
         
         # Load population and validation data
-        self.load_data()
+        if load:
+            self.load_data()
 
-        self.n_epochs = max(row['n_epochs'] for row in self.index)
 
     def load_data(self):
         failed = []
@@ -176,26 +177,38 @@ class Session:
                         print "Failed to open validation", val_type
                         failed.append(val_type)
 
-    def set_groups(self, names, filt = None):
+        self.n_epochs = max(row['n_epochs'] for row in self.index)
+
+    def set_groups(self, names, filt = None, strict_filter = True):
         self.group_mapping = OrderedDict()
         for name in names:
             self.group_mapping[name] = [g for g in self.gnames_raw
                                         if name in g and
                                         (   (filt == None) or
                                             (type(filt) == str and filt in g) or
-                                            (type(filt) == list and np.any([f in g for f in filt]))
+                                            (type(filt) == list and strict_filter and np.all([f in g for f in filt])) or
+                                            (type(filt) == list and not strict_filter and np.any([f in g for f in filt]))
                                         )]
         self.gnames = self.group_mapping.keys()
         self.filt = filt
 
+    def exclude_cells(self, cellnames):
+        ''' Exclude the given cells from all analysis '''
+        if type(cellnames) == str and len(cellnames) > 0:
+            cellnames = [cellnames]
+        elif type(cellnames) != list:
+            cellnames = []
+        self.excluded_cells = cellnames
+
+
     def index_by_cell(self, cell, rows=None):
         for row in rows or self.index:
-            if row['cell'] == cell:
+            if row['cell'] == cell and cell not in self.excluded_cells:
                 yield row
 
     def index_by_group(self, gname, rows=None):
         for row in rows or self.index:
-            if row['group'] in self.group_mapping[gname]:
+            if row['group'] in self.group_mapping[gname] and row['cell'] not in self.excluded_cells:
                 yield row
 
     def figname(self, name, fmt = 'svg'):
@@ -206,6 +219,16 @@ class Session:
         else:
             fstr = '-'.join(self.filt) + '_'
         return self.path + '/' + self.figbase.replace('%g', '-'.join(self.gnames)).replace('%f_', fstr) + '_' + name + '.' + fmt
+
+    def get_legend_n(self):
+        legend = []
+        for gname in self.gnames:
+            gdata = [row for row in self.index_by_group(gname)]
+            n = np.sum([row['n_subpops'] for row in gdata])
+            nc = len(np.unique([row['cell'] for row in gdata]))
+            nr = len(np.unique([row['record'] for row in gdata]))
+            legend.append('%s (n=%d fits, %d cells, %d recs)' % (gname, n, nc, nr))
+        return legend
 
     def plot_all(self, figbase = None, **kwargs):
         if figbase:
@@ -240,7 +263,7 @@ class Session:
         if reftype == 'popstd':
             conv = ': Convergence '
             figname = 'convergence_' + reftype
-        if center == 'median':
+        elif center == 'median':
             conv = ': Median model convergence '
         elif center == 'lowerr':
             conv = ': Best-fit model convergence '
@@ -300,7 +323,7 @@ class Session:
         pctile = kwargs.get('percentile', percentile)
         pctiles = [np.percentile(group, [100-pctile, 50, pctile], axis=(0,3)) for group in data]
         lines = [plot_with_shade(ax, group) for group in pctiles]
-        plt.figlegend(lines, self.gnames, 'upper right');
+        plt.figlegend(lines, self.get_legend_n(), 'upper right');
         plt.suptitle(title)
         f = self.figname(figname)
         plt.savefig(f)
@@ -313,7 +336,7 @@ class Session:
         pctile = kwargs.get('percentile', percentile)
         pctiles = [np.percentile(group, [100-pctile, 50, pctile], axis=(0,2)) for group in norm_data]
         lines = [plot_single_shaded(ax, group) for group in pctiles]
-        plt.figlegend(lines, self.gnames, 'upper right')
+        plt.figlegend(lines, self.get_legend_n(), 'upper right')
         plt.suptitle(title)
         f = self.figname(figname + '-norm')
         plt.savefig(f)
@@ -326,7 +349,7 @@ class Session:
         eps = kwargs.get('boxplot_epochs', boxplot_epochs)
         boxplot([np.moveaxis(group[:,np.array(eps)-1,:], 1, 2).reshape(-1, len(eps))
                  for group in norm_data],
-                self.gnames, eps)
+                self.get_legend_n(), eps)
         plt.ylim(ymin=0)
         plt.suptitle(title)
         f = self.figname(figname + '-box')
@@ -404,7 +427,7 @@ class Session:
             plt.axhline(0, color = 'gray', ls = 'dotted')
         else:
             plt.xlim((-0.05*self.n_epochs, 1.05*(self.n_epochs+10+10*len(self.gnames))))
-        plt.legend(lines, self.gnames)
+        plt.legend(lines, self.get_legend_n())
         plt.suptitle(title)
         f = self.figname(figname)
         plt.savefig(f)
@@ -417,10 +440,10 @@ class Session:
         selected_validation = [val[:,np.array(eps)-1] for val in validation]
         if norm:
             plt.axhline(0, color = 'gray', ls = 'dotted')
-            boxplot(selected_validation, self.gnames, eps)
+            boxplot(selected_validation, self.get_legend_n(), eps)
         else:
             val_all = [sel.T.tolist() + tar[None,:].tolist() for sel,tar in zip(selected_validation, validation_target)]
-            boxplot(val_all, self.gnames, list(eps) + ['classical fit'])
+            boxplot(val_all, self.get_legend_n(), list(eps) + ['classical fit'])
         plt.suptitle(title)
         f = self.figname(figname + '-box')
         plt.savefig(f)
