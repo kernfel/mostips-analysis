@@ -114,35 +114,36 @@ class Session:
                         row['reference'][idx] = float(trow[1].split(' ')[0])
                     except:
                         pass
-        
-        # Load population and validation data
-        if load:
-            self.load_data()
 
-
-    def load_data(self):
-        failed = []
+        # Ensure correct typing
         for row in self.index:
             row['n_epochs'] = int(row['n_epochs'])
             row['n_pop'] = int(row['n_pop'])
             row['n_subpops'] = int(row['n_subpops'])
             row['subpop_sz'] = row['n_pop'] // row['n_subpops']
-            
+        self.n_epochs = min(row['n_epochs'] for row in self.index)
+
+        # Load population and validation data
+        if load:
+            self.load_populations()
+            self.load_validations()
+
+    def load_populations(self):
+        for row in self.index:
             fit = self.path + '/%04d.GAFitter.fit' % int(row['fileno'])
-            
-            # Load populations
+
+            # Load populations : (n_epochs, nparams, n_subpops, subpop_sz)
             with open(fit + '.pops') as datafile:
                 if int(row['subpop_split']):
-                    row['data'] = np.fromfile(datafile, dtype=np.dtype(np.float32)).reshape(
+                    pops = np.fromfile(datafile, dtype=np.dtype(np.float32)).reshape(
                         (row['n_epochs'], self.nparams, 2, row['n_subpops'], row['subpop_sz']/2))\
                         .swapaxes(2,3).reshape(
                         (row['n_epochs'], self.nparams, row['n_subpops'], row['subpop_sz']))
                 else:
-                    row['data'] = np.fromfile(datafile, dtype=np.dtype(np.float32)).reshape(
+                    pops = np.fromfile(datafile, dtype=np.dtype(np.float32)).reshape(
                         (row['n_epochs'], self.nparams, row['n_subpops'], row['subpop_sz']))
 
-            # Load errors to determine lowest-cost models
-            # row['lowerr']: (n_epochs, nparams, n_subpops)
+            # Load errors to determine lowest-cost models : (n_epochs, n_subpops, subpop_sz)
             with open(fit + '.errs') as errfile:
                 if int(row['subpop_split']):
                     errs = np.fromfile(errfile, dtype=np.dtype(np.float32)).reshape(
@@ -152,32 +153,36 @@ class Session:
                 else:
                     errs = np.fromfile(errfile, dtype=np.dtype(np.float32)).reshape(
                         (row['n_epochs'], row['n_subpops'], row['subpop_sz']))
-                indices = np.argmin(errs, axis=2)
-                row['lowerr'] = row['data'][np.ogrid[:row['n_epochs'], :self.nparams, :row['n_subpops']] + [indices[:,None,:]]]
 
-            row['median'] = np.median(row['data'], axis=3) # (n_epochs, nparams, n_subpops)
+            # row data (lowerr, median, lowerr_mad, median_mad, std): (n_epochs, nparams, n_subpops)
+            indices = np.argmin(errs, axis=2)
+            row['lowerr'] = pops[np.ogrid[:row['n_epochs'], :self.nparams, :row['n_subpops']] + [indices[:,None,:]]]
 
-            # Load validations and crossvalidations
+            row['median'] = np.median(pops, axis=3)
+
+            row['lowerr_mad'] = np.median(np.abs(pops - row['lowerr'][:,:,:,None]), axis=3)
+            row['median_mad'] = np.median(np.abs(pops - row['median'][:,:,:,None]), axis=3)
+
+            row['std'] = np.std(pops, axis=3)
+
+    def load_validations(self):
+        for row in self.index:
+            fit = self.path + '/%04d.GAFitter.fit' % int(row['fileno'])
+
             for val_type in ['median_validation', 'lowerr_validation', 'median_xvalidation', 'lowerr_xvalidation']:
                 try:
                     with open(fit + '.' + val_type) as datafile:
                         row[val_type] = np.fromfile(datafile, dtype=np.dtype(np.float64)).reshape(
                             (row['n_subpops'], row['n_epochs']))
                 except:
-                    if val_type not in failed:
-                        print "Failed to open validation", val_type
-                        failed.append(val_type)
-            
+                    print "Failed to open %s.%s" % (fit,val_type)
+
             for val_type in ['target_validation', 'target_xvalidation']:
                 try:
                     with open(fit + '.' + val_type) as datafile:
                         row[val_type] = np.fromfile(datafile, dtype=np.dtype(np.float64))
                 except:
-                    if val_type not in failed:
-                        print "Failed to open validation", val_type
-                        failed.append(val_type)
-
-        self.n_epochs = max(row['n_epochs'] for row in self.index)
+                    print "Failed to open %s.%s" % (fit,val_type)
 
     def set_groups(self, names, filt = None, strict_filter = True):
         self.group_mapping = OrderedDict()
@@ -287,16 +292,14 @@ class Session:
         for gname in self.gnames:
             gdata = [row for row in self.index_by_group(gname)]
 
-            # row['data']: (epochs, params, subpops, nmodels)
-            # row['median'/'lowerr']: (epochs, params, subpops)
+            # row['*_mad'/'std'/'median'/'lowerr']: (epochs, params, subpops)
             # row['reference']: (params)
             # group_convergence: (fits, epochs, params, subpops)
 
             if reftype == 'popmad':
-                group_convergence = [np.median(np.abs(row['data'] - row[center][:,:,:,None]), axis=3)
-                                     for row in gdata]
+                group_convergence = [row[center + '_mad'] for row in gdata]
             elif reftype == 'popstd':
-                group_convergence = [np.std(row['data'], axis=3) for row in gdata]
+                group_convergence = [row['std'] for row in gdata]
             elif reftype == 'cell':
                 ref = dict()
                 g_cnames = [row['cell'] for row in gdata]
