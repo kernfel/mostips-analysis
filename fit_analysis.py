@@ -107,16 +107,21 @@ class Session:
         # Load target parameter values
         for row in self.index:
             row['reference'] = np.zeros(self.nparams)
-            with open(row['record'].replace('.atf', '.params')) as tfile:
-                for trow in csv.reader(tfile, delimiter='\t'):
-                    try:
-                        idx = self.pnames.index(trow[0].split(':')[0])
-                        row['reference'][idx] = float(trow[1].split(' ')[0])
-                    except:
-                        pass
+            if  row['record'] == 'simulated':
+                with open(path + '/' + row['cell'] + '.params') as tfile:
+                    row['reference'] = np.array([float(p[0]) for p in csv.reader(tfile)])
+            else:
+                with open(row['record'].replace('.atf', '.params')) as tfile:
+                    for trow in csv.reader(tfile, delimiter='\t'):
+                        try:
+                            idx = self.pnames.index(trow[0].split(':')[0])
+                            row['reference'][idx] = float(trow[1].split(' ')[0])
+                        except:
+                            pass
 
         # Ensure correct typing
         for row in self.index:
+            row['fileno'] = int(row['fileno'])
             row['n_epochs'] = int(row['n_epochs'])
             row['n_pop'] = int(row['n_pop'])
             row['n_subpops'] = int(row['n_subpops'])
