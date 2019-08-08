@@ -134,41 +134,48 @@ class Session:
             self.load_validations()
 
     def load_populations(self):
-        for row in self.index:
-            fit = self.path + '/%04d.GAFitter.fit' % int(row['fileno'])
+        for i,row in enumerate(self.index):
+            print("Loading row %d of %d, fileno %04d..." % (i, len(self.index), row['fileno']))
 
-            # Load populations : (n_epochs, nparams, n_subpops, subpop_sz)
-            with open(fit + '.pops') as datafile:
-                if int(row['subpop_split']):
-                    pops = np.fromfile(datafile, dtype=np.dtype(np.float32)).reshape(
-                        (row['n_epochs'], self.nparams, 2, row['n_subpops'], row['subpop_sz']/2))\
-                        .swapaxes(2,3).reshape(
-                        (row['n_epochs'], self.nparams, row['n_subpops'], row['subpop_sz']))
-                else:
-                    pops = np.fromfile(datafile, dtype=np.dtype(np.float32)).reshape(
-                        (row['n_epochs'], self.nparams, row['n_subpops'], row['subpop_sz']))
+            fit = self.path + '/%04d.GAFitter.fit' % row['fileno']
 
-            # Load errors to determine lowest-cost models : (n_epochs, n_subpops, subpop_sz)
-            with open(fit + '.errs') as errfile:
-                if int(row['subpop_split']):
-                    errs = np.fromfile(errfile, dtype=np.dtype(np.float32)).reshape(
-                        (row['n_epochs'], 2, row['n_subpops'], row['subpop_sz']/2))\
-                        .swapaxes(1,2).reshape(
-                        (row['n_epochs'], row['n_subpops'], row['subpop_sz']))
-                else:
-                    errs = np.fromfile(errfile, dtype=np.dtype(np.float32)).reshape(
-                        (row['n_epochs'], row['n_subpops'], row['subpop_sz']))
+            try:
+                # Load populations : (n_epochs, nparams, n_subpops, subpop_sz)
+                with open(fit + '.pops') as datafile:
+                    if int(row['subpop_split']):
+                        pops = np.fromfile(datafile, dtype=np.dtype(np.float32)).reshape(
+                            (row['n_epochs'], self.nparams, 2, row['n_subpops'], row['subpop_sz']/2))\
+                            .swapaxes(2,3).reshape(
+                            (row['n_epochs'], self.nparams, row['n_subpops'], row['subpop_sz']))
+                    else:
+                        pops = np.fromfile(datafile, dtype=np.dtype(np.float32)).reshape(
+                            (row['n_epochs'], self.nparams, row['n_subpops'], row['subpop_sz']))
 
-            # row data (lowerr, median, lowerr_mad, median_mad, std): (n_epochs, nparams, n_subpops)
-            indices = np.argmin(errs, axis=2)
-            row['lowerr'] = pops[np.ogrid[:row['n_epochs'], :self.nparams, :row['n_subpops']] + [indices[:,None,:]]]
+                # Load errors to determine lowest-cost models : (n_epochs, n_subpops, subpop_sz)
+                with open(fit + '.errs') as errfile:
+                    if int(row['subpop_split']):
+                        errs = np.fromfile(errfile, dtype=np.dtype(np.float32)).reshape(
+                            (row['n_epochs'], 2, row['n_subpops'], row['subpop_sz']/2))\
+                            .swapaxes(1,2).reshape(
+                            (row['n_epochs'], row['n_subpops'], row['subpop_sz']))
+                    else:
+                        errs = np.fromfile(errfile, dtype=np.dtype(np.float32)).reshape(
+                            (row['n_epochs'], row['n_subpops'], row['subpop_sz']))
 
-            row['median'] = np.median(pops, axis=3)
+                # row data (lowerr, median, lowerr_mad, median_mad, std): (n_epochs, nparams, n_subpops)
+                indices = np.argmin(errs, axis=2)
+                row['lowerr'] = pops[np.ogrid[:row['n_epochs'], :self.nparams, :row['n_subpops']] + [indices[:,None,:]]]
 
-            row['lowerr_mad'] = np.median(np.abs(pops - row['lowerr'][:,:,:,None]), axis=3)
-            row['median_mad'] = np.median(np.abs(pops - row['median'][:,:,:,None]), axis=3)
+                row['median'] = np.median(pops, axis=3)
 
-            row['std'] = np.std(pops, axis=3)
+                row['lowerr_mad'] = np.median(np.abs(pops - row['lowerr'][:,:,:,None]), axis=3)
+                row['median_mad'] = np.median(np.abs(pops - row['median'][:,:,:,None]), axis=3)
+
+                row['std'] = np.std(pops, axis=3)
+
+            except IOError:
+                for set in ['lowerr', 'median', 'lowerr_mad', 'median_mad', 'std']:
+                    row[set] = np.fromfile(fit + '.' + set, dtype=np.dtype(np.float32)).reshape(row['n_epochs'], self.nparams, row['n_subpops'])
 
     def load_validations(self):
         for row in self.index:
@@ -188,6 +195,18 @@ class Session:
                         row[val_type] = np.fromfile(datafile, dtype=np.dtype(np.float64))
                 except:
                     print "Failed to open %s.%s" % (fit,val_type)
+
+    def compress(self, destructive = False):
+        for row in self.index:
+            fit = self.path + '/%04d.GAFitter.fit' % row['fileno']
+            for set in ['lowerr', 'median', 'lowerr_mad', 'median_mad', 'std']:
+                row[set].tofile(fit + '.' + set)
+            if destructive:
+                for set in ['pops', 'errs']:
+                    try:
+                        os.remove(fit + '.' + set)
+                    except OSError as e:
+                        print(e)
 
     def set_groups(self, names, filt = None, strict_filter = True):
         self.group_mapping = OrderedDict()
