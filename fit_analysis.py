@@ -43,11 +43,12 @@ def fig_setup(xlabel = '', ylabel = '', **kwargs):
     return fig,ax
 
 def grid_setup(pnames, xlabel = 'Epoch', **kwargs):
-    fig,axes = plt.subplots(kwargs.get('rows', rows), kwargs.get('cols', cols), sharex='col', figsize=kwargs.get('figsize_grid', figsize_grid))
+    r, c = kwargs.get('rows', rows), kwargs.get('cols', cols)
+    fig,axes = plt.subplots(r, c, sharex='col', figsize=kwargs.get('figsize_grid', figsize_grid))
     for i,ax in enumerate(axes.ravel()):
         if i < len(pnames):
             ax.set_ylabel(pnames[i])
-            if i >= len(pnames) - cols:
+            if i >= len(pnames) - c:
                 ax.set_xlabel(xlabel)
     return fig,axes
 
@@ -57,15 +58,26 @@ def set_box_color(bp, color):
     plt.setp(bp['caps'], color=color)
     plt.setp(bp['medians'], color=color)
 
-def boxplot(data, group_names, param_names): # data: (groups, datapoints, params)
+def set_violin_color(v, color):
+    for key in ['cbars', 'cmeans', 'cmedians', 'cmins', 'cmaxes']:
+        if v.has_key(key):
+            plt.setp(v[key], color=color)
+    for b in v['bodies']:
+        plt.setp(b, color=color)
+
+def boxplot(data, group_names, param_names, violins = False, **kwargs): # data: (groups, datapoints, params)
     numg, nump = len(group_names), len(param_names)
+    colors = [plt.plot([],label=name)[0].get_color() for name in group_names]
 
     for i, group in enumerate(data):
-        line, = plt.plot([], label=group_names[i])
-        col = line.get_color()
-        b = plt.boxplot(group, positions=np.arange(i, (numg+1)*nump, (numg+1)),
-                        widths=0.8, flierprops={'markeredgecolor':col})
-        set_box_color(b, col)
+        pos = np.arange(i, (numg+1)*nump, (numg+1))
+        if violins:
+            b = plt.violinplot(group, positions=pos, **kwargs)
+            set_violin_color(b, colors[i])
+        else:
+            b = plt.boxplot(group, positions=pos,
+                            widths=0.8, flierprops={'markeredgecolor':colors[i]})
+            set_box_color(b, colors[i])
 
     plt.xticks(np.arange((numg-1)/2., (numg+1)*nump, numg+1), param_names)
     plt.xlim(-1, (numg+1)*nump-1)
@@ -102,6 +114,7 @@ class Session:
             with open(path + '/../../deltabar') as dfile:
                 deltabar = [float(row[0]) for row in csv.reader(dfile)]
             self.sigmata = np.divide(sigmata, deltabar)
+            self.model_sigma = np.array(sigmata)
         self.nparams = len(self.pnames)
 
         # Load target parameter values
@@ -177,6 +190,31 @@ class Session:
                 for set in ['lowerr', 'median', 'lowerr_mad', 'median_mad', 'std']:
                     row[set] = np.fromfile(fit + '.' + set, dtype=np.dtype(np.float32)).reshape(row['n_epochs'], self.nparams, row['n_subpops'])
 
+            try:
+                with open(fit + '.final.params') as datafile:
+                    row['final'] = np.fromfile(datafile, dtype=np.dtype(np.float32)).reshape(row['n_subpops'], self.nparams) # (subpops, nparams) !!!
+                with open(fit + '.final.pop') as datafile:
+                    row['fpop'] = np.fromfile(datafile, dtype=np.dtype(np.float32)).reshape(self.nparams, row['n_pop'])
+                pcov = np.cov(row['fpop'])
+                row['pmean'] = np.mean(row['fpop'], axis=1)
+                try:
+                    row['pinv'] = np.linalg.inv(pcov)
+                except np.linalg.LinAlgError:
+                    pass
+            except IOError:
+                pass
+
+        final_std = np.array([row['std'][-1] for row in self.index]) / self.sigmata[None,:,None] # (fits, nparams, n_subpops)
+        self.std_normalisation_factor = np.median(np.linalg.norm(final_std, axis=1).ravel())
+        self.std_normalisation_fold_sigma = self.std_normalisation_factor / np.linalg.norm(self.model_sigma / self.sigmata)
+        for row in self.index:
+            row['norm_std'] = np.linalg.norm(row['std'][-1] / self.sigmata[:,None], axis=0) / self.std_normalisation_factor # (n_subpops) in each row
+
+        final_similarity = np.array([np.abs(row['lowerr'][-1] - row['reference'][:,None]) for row in self.index]) / self.sigmata[None,:,None]
+        norm_similarity = np.median(np.linalg.norm(final_similarity, axis=1).ravel())
+        for row in self.index:
+            row['norm_similarity'] = np.linalg.norm(np.abs(row['lowerr'][-1] - row['reference'][:,None]) / self.sigmata[:,None], axis=0) / norm_similarity
+
     def load_validations(self):
         for row in self.index:
             fit = self.path + '/%04d.GAFitter.fit' % int(row['fileno'])
@@ -207,6 +245,17 @@ class Session:
                         os.remove(fit + '.' + set)
                     except OSError as e:
                         print(e)
+
+    def set_groups_2(self, names, all_of = [], any_of = [], exclude = []):
+        self.group_mapping = OrderedDict()
+        for name in names:
+            self.group_mapping[name] = [g for g in self.gnames_raw
+                                        if name in g
+                                        and np.all([x in g for x in all_of])
+                                        and (len(any_of) == 0 or np.any([x in g for x in any_of]))
+                                        and np.all([x not in g for x in exclude])
+                                       ]
+        self.gnames = self.group_mapping.keys()
 
     def set_groups(self, names, filt = None, strict_filter = True):
         self.group_mapping = OrderedDict()
@@ -249,14 +298,17 @@ class Session:
             fstr = '-'.join(self.filt) + '_'
         return self.path + '/' + self.figbase.replace('%g', '-'.join(self.gnames)).replace('%f_', fstr) + '_' + name + '.' + fmt
 
-    def get_legend_n(self):
+    def get_legend_n(self, rich_n = True):
         legend = []
         for gname in self.gnames:
             gdata = [row for row in self.index_by_group(gname)]
             n = np.sum([row['n_subpops'] for row in gdata])
-            nc = len(np.unique([row['cell'] for row in gdata]))
-            nr = len(np.unique([row['record'] for row in gdata]))
-            legend.append('%s (n=%d fits, %d cells, %d recs)' % (gname, n, nc, nr))
+            if rich_n:
+                nc = len(np.unique([row['cell'] for row in gdata]))
+                nr = len(np.unique([row['record'] for row in gdata]))
+                legend.append('%s (n=%d fits, %d cells, %d recs)' % (gname, n, nc, nr))
+            else:
+                legend.append('%s (n=%d)' % (gname, n))
         return legend
 
     def plot_all(self, figbase = None, **kwargs):
@@ -277,7 +329,8 @@ class Session:
         self.plot_convergence('popstd', **kwargs)
         for reftype in ['popmad', 'cell', 'record', 'external']:
             for center in ['median', 'lowerr']:
-                self.plot_convergence(reftype, center, **kwargs)
+                for fig in self.plot_convergence(reftype, center, **kwargs):
+                    plt.close(fig)
 
     def plot_convergence(self, reftype, center = 'median', **kwargs):
         ref_title = dict(   popstd = 'within populations (stddev)',
@@ -302,13 +355,15 @@ class Session:
         abs_data = [np.abs(group) for group in data]
         norm_data = [np.linalg.norm(np.divide(group, self.sigmata[None,None,:,None]), axis=2) for group in data] # (groups, fits, epochs, subpops)
 
+        grid_abs, grid_raw = None,None
         if reftype in ['cell', 'record', 'external']:
-            self.plot_grid(title + ' (abs)', figname + '-abs', abs_data, **kwargs)
+            grid_abs = self.plot_grid(title + ' (abs)', figname + '-abs', abs_data, **kwargs)
         if reftype in ['popmad', 'popstd', 'external']:
-            self.plot_grid(title, figname, data, **kwargs)
-        self.plot_norm(title, figname, norm_data, **kwargs)
-        self.plot_boxes(title, figname, norm_data, **kwargs)
-        plt.close('all')
+            grid_raw = self.plot_grid(title, figname, data, **kwargs)
+        norm = self.plot_norm(title, figname, norm_data, **kwargs)
+        box = self.plot_boxes(title, figname, norm_data, **kwargs)
+
+        return grid_abs, grid_raw, norm, box
 
     def get_convergence(self, reftype, center):
         ''' output: (groups, fits, epochs, params, subpops) '''
@@ -350,12 +405,13 @@ class Session:
         pctile = kwargs.get('percentile', percentile)
         pctiles = [np.percentile(group, [100-pctile, 50, pctile], axis=(0,3)) for group in data]
         lines = [plot_with_shade(ax, group) for group in pctiles]
-        plt.figlegend(lines, self.get_legend_n(), 'upper right');
+        plt.figlegend(lines, self.get_legend_n(kwargs.get('rich_n_legend', True)), 'upper right');
         plt.suptitle(title)
-        f = self.figname(figname)
-        plt.savefig(f)
-        plt.close(fig)
-        print f
+        if kwargs.get('save', True):
+            f = self.figname(figname)
+            plt.savefig(f)
+            print f
+        return fig
 
     def plot_norm(self, title, figname, norm_data, **kwargs):
         ''' norm_data: (groups, fits, epochs, subpops) '''
@@ -363,12 +419,13 @@ class Session:
         pctile = kwargs.get('percentile', percentile)
         pctiles = [np.percentile(group, [100-pctile, 50, pctile], axis=(0,2)) for group in norm_data]
         lines = [plot_single_shaded(ax, group) for group in pctiles]
-        plt.figlegend(lines, self.get_legend_n(), 'upper right')
+        plt.legend(lines, self.get_legend_n(kwargs.get('rich_n_legend', True)))
         plt.suptitle(title)
-        f = self.figname(figname + '-norm')
-        plt.savefig(f)
-        plt.close(fig)
-        print f
+        if kwargs.get('save', True):
+            f = self.figname(figname + '-norm')
+            plt.savefig(f)
+            print f
+        return fig
 
     def plot_boxes(self, title, figname, norm_data, **kwargs):
         ''' norm_data: (groups, fits, epochs, subpops) '''
@@ -376,13 +433,14 @@ class Session:
         eps = kwargs.get('boxplot_epochs', boxplot_epochs)
         boxplot([np.moveaxis(group[:,np.array(eps)-1,:], 1, 2).reshape(-1, len(eps))
                  for group in norm_data],
-                self.get_legend_n(), eps)
+                self.get_legend_n(kwargs.get('rich_n_legend', True)), eps)
         plt.ylim(ymin=0)
         plt.suptitle(title)
-        f = self.figname(figname + '-box')
-        plt.savefig(f)
-        plt.close(fig)
-        print f
+        if kwargs.get('save', True):
+            f = self.figname(figname + '-box')
+            plt.savefig(f)
+            print f
+        return fig
 
 
 ####################### Validation ###############################
@@ -456,10 +514,11 @@ class Session:
             plt.xlim((-0.05*self.n_epochs, 1.05*(self.n_epochs+10+10*len(self.gnames))))
         plt.legend(lines, self.get_legend_n())
         plt.suptitle(title)
-        f = self.figname(figname)
-        plt.savefig(f)
-        plt.close(fig)
-        print f
+        if kwargs.get('save', True):
+            f = self.figname(figname)
+            plt.savefig(f)
+            plt.close(fig)
+            print f
 
         ## Boxes
         fig,ax = fig_setup(ylabel=ylabel, **kwargs)
@@ -472,7 +531,8 @@ class Session:
             val_all = [sel.T.tolist() + tar[None,:].tolist() for sel,tar in zip(selected_validation, validation_target)]
             boxplot(val_all, self.get_legend_n(), list(eps) + ['classical fit'])
         plt.suptitle(title)
-        f = self.figname(figname + '-box')
-        plt.savefig(f)
-        plt.close(fig)
-        print f
+        if kwargs.get('save', True):
+            f = self.figname(figname + '-box')
+            plt.savefig(f)
+            plt.close(fig)
+            print f
