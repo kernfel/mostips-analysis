@@ -47,7 +47,15 @@ def grid_setup(pnames, xlabel = 'Epoch', **kwargs):
     fig,axes = plt.subplots(r, c, sharex='col', figsize=kwargs.get('figsize_grid', figsize_grid))
     for i,ax in enumerate(axes.ravel()):
         if i < len(pnames):
-            ax.set_ylabel(pnames[i])
+            if pnames[i] == 'C':
+                units = 'nF'
+            elif pnames[i][0] == 'g':
+                units = u'µS'
+            elif pnames[i][:3]=='tau' and pnames[i][-3:] in ['min','max','mid','off']:
+                units = 'ms'
+            else:
+                units = 'mV'
+            ax.set_ylabel(u'%s (%s)' % (pnames[i], units))
             if i >= len(pnames) - c:
                 ax.set_xlabel(xlabel)
     return fig,axes
@@ -113,8 +121,10 @@ class Session:
             self.pnames, sigmata = zip(*[(row[0], float(row[1])) for row in csv.reader(pfile, delimiter = '\t')])
             with open(path + '/../../deltabar') as dfile:
                 deltabar = [float(row[0]) for row in csv.reader(dfile)]
-            self.sigmata = np.divide(sigmata, deltabar)
             self.model_sigma = np.array(sigmata)
+            self.deltabar = np.array(deltabar)
+            self.sigmata = np.divide(sigmata, deltabar)
+            self.dnorm = np.divide(deltabar, sigmata)
         self.nparams = len(self.pnames)
 
         # Load target parameter values
@@ -139,6 +149,7 @@ class Session:
             row['n_pop'] = int(row['n_pop'])
             row['n_subpops'] = int(row['n_subpops'])
             row['subpop_sz'] = row['n_pop'] // row['n_subpops']
+            row['subpop_split'] = int(row['subpop_split'])
         self.n_epochs = min(row['n_epochs'] for row in self.index)
 
         # Load population and validation data
@@ -153,9 +164,13 @@ class Session:
             fit = self.path + '/%04d.GAFitter.fit' % row['fileno']
 
             try:
+                for set in ['lowerr', 'median', 'lowerr_mad', 'median_mad', 'std']:
+                    row[set] = np.fromfile(fit + '.' + set, dtype=np.dtype(np.float32)).reshape(row['n_epochs'], self.nparams, row['n_subpops'])
+
+            except IOError:
                 # Load populations : (n_epochs, nparams, n_subpops, subpop_sz)
                 with open(fit + '.pops') as datafile:
-                    if int(row['subpop_split']):
+                    if row['subpop_split']:
                         pops = np.fromfile(datafile, dtype=np.dtype(np.float32)).reshape(
                             (row['n_epochs'], self.nparams, 2, row['n_subpops'], row['subpop_sz']/2))\
                             .swapaxes(2,3).reshape(
@@ -166,7 +181,7 @@ class Session:
 
                 # Load errors to determine lowest-cost models : (n_epochs, n_subpops, subpop_sz)
                 with open(fit + '.errs') as errfile:
-                    if int(row['subpop_split']):
+                    if row['subpop_split']:
                         errs = np.fromfile(errfile, dtype=np.dtype(np.float32)).reshape(
                             (row['n_epochs'], 2, row['n_subpops'], row['subpop_sz']/2))\
                             .swapaxes(1,2).reshape(
@@ -186,23 +201,23 @@ class Session:
 
                 row['std'] = np.std(pops, axis=3)
 
-            except IOError:
-                for set in ['lowerr', 'median', 'lowerr_mad', 'median_mad', 'std']:
-                    row[set] = np.fromfile(fit + '.' + set, dtype=np.dtype(np.float32)).reshape(row['n_epochs'], self.nparams, row['n_subpops'])
-
             try:
                 with open(fit + '.final.params') as datafile:
                     row['final'] = np.fromfile(datafile, dtype=np.dtype(np.float32)).reshape(row['n_subpops'], self.nparams) # (subpops, nparams) !!!
                 with open(fit + '.final.pop') as datafile:
-                    row['fpop'] = np.fromfile(datafile, dtype=np.dtype(np.float32)).reshape(self.nparams, row['n_pop'])
-                pcov = np.cov(row['fpop'])
-                row['pmean'] = np.mean(row['fpop'], axis=1)
-                try:
-                    row['pinv'] = np.linalg.inv(pcov)
-                except np.linalg.LinAlgError:
-                    pass
+                    if row['subpop_split']:
+                        row['fpop'] = np.fromfile(datafile, dtype=np.dtype(np.float32)).reshape(
+                            (self.nparams, 2, row['n_subpops'], row['subpop_sz']/2))\
+                            .swapaxes(1,2).reshape(
+                            (self.nparams, row['n_subpops'], row['subpop_sz']))
+                    else:
+                        row['fpop'] = np.fromfile(datafile, dtype=np.dtype(np.float32)).reshape(
+                            (self.nparams, row['n_subpops'], row['subpop_sz']))
+                    row['final_dnorm_std'] = np.dot(np.std(row['fpop'], axis=2).T, self.dnorm)
             except IOError:
                 pass
+
+            row['dnorm_std'] = np.dot(np.moveaxis(row['std'], 1,2), self.dnorm) # (n_epochs, n_subpops)
 
         final_std = np.array([row['std'][-1] for row in self.index]) / self.sigmata[None,:,None] # (fits, nparams, n_subpops)
         self.std_normalisation_factor = np.median(np.linalg.norm(final_std, axis=1).ravel())
@@ -353,7 +368,8 @@ class Session:
 
         data = self.get_convergence(reftype, center) # (groups, fits, epochs, params, subpops)
         abs_data = [np.abs(group) for group in data]
-        norm_data = [np.linalg.norm(np.divide(group, self.sigmata[None,None,:,None]), axis=2) for group in data] # (groups, fits, epochs, subpops)
+        norm_data = [np.dot(np.swapaxes(group,2,3), self.dnorm) for group in abs_data] # (groups, fits, epochs, subpops)
+#        norm_data = [np.linalg.norm(np.divide(group, self.sigmata[None,None,:,None]), axis=2) for group in data] # (groups, fits, epochs, subpops)
 
         grid_abs, grid_raw = None,None
         if reftype in ['cell', 'record', 'external']:
