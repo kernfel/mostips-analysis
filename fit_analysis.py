@@ -249,6 +249,16 @@ class Session:
                 except:
                     print "Failed to open %s.%s" % (fit,val_type)
 
+    def load_final_xvalidations(self):
+        for row in self.index:
+            fit = self.path + '/%04d.GAFitter.fit' % int(row['fileno'])
+            for val_type in ['final_xvalidation', 'target_xvalidation']:
+                try:
+                    with open(fit + '.' + val_type) as datafile:
+                        row[val_type] = np.fromfile(datafile, dtype=np.dtype(np.float64))
+                except:
+                    print "Failed to open %s.%s" % (fit, val_type)
+
     def compress(self, destructive = False):
         for row in self.index:
             fit = self.path + '/%04d.GAFitter.fit' % row['fileno']
