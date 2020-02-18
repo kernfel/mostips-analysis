@@ -92,10 +92,11 @@ def boxplot(data, group_names, param_names, violins = False, **kwargs): # data: 
     plt.legend()
 
 class Session:
-    def __init__(self, path, index_file, modelname, load = True):
+    def __init__(self, path, index_file, modelname, load = True, ftype = 'fit'):
         self.path = path
         self.modelname = modelname
         self.figbase = "figure_%f_%g"
+        self.ftype = ftype
 
         # Load index
         with open(path + '/' + index_file) as ifile:
@@ -161,7 +162,7 @@ class Session:
         for i,row in enumerate(self.index):
             print("Loading row %d of %d, fileno %04d..." % (i, len(self.index), row['fileno']))
 
-            fit = self.path + '/%04d.GAFitter.fit' % row['fileno']
+            fit = self.path + '/%04d.GAFitter.%s' % (row['fileno'], self.ftype)
 
             try:
                 for set in ['lowerr', 'median', 'lowerr_mad', 'median_mad', 'std']:
@@ -232,7 +233,7 @@ class Session:
 
     def load_validations(self):
         for row in self.index:
-            fit = self.path + '/%04d.GAFitter.fit' % int(row['fileno'])
+            fit = self.path + '/%04d.GAFitter.%s' % (row['fileno'], self.ftype)
 
             for val_type in ['median_validation', 'lowerr_validation', 'median_xvalidation', 'lowerr_xvalidation']:
                 try:
@@ -251,7 +252,7 @@ class Session:
 
     def load_final_xvalidations(self):
         for row in self.index:
-            fit = self.path + '/%04d.GAFitter.fit' % int(row['fileno'])
+            fit = self.path + '/%04d.GAFitter.%s' % (row['fileno'], self.ftype)
             for val_type in ['final_xvalidation', 'target_xvalidation']:
                 try:
                     with open(fit + '.' + val_type) as datafile:
@@ -261,7 +262,7 @@ class Session:
 
     def compress(self, destructive = False):
         for row in self.index:
-            fit = self.path + '/%04d.GAFitter.fit' % row['fileno']
+            fit = self.path + '/%04d.GAFitter.%s' % (row['fileno'], self.ftype)
             for set in ['lowerr', 'median', 'lowerr_mad', 'median_mad', 'std']:
                 row[set].tofile(fit + '.' + set)
             if destructive:
